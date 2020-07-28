@@ -1,0 +1,59 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "aws-egressip-operator.fullname" . }}
+rules:
+  - apiGroups:
+    - redhatcop.redhat.io
+    resources:
+    - egressips
+    - egressips/finalizers
+    - egressips/status
+    verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+  - apiGroups:
+    - ""
+    resources:
+    - secrets
+    verbs:
+    - get
+    - list
+    - watch    
+  - apiGroups:
+    - ""
+    resources:
+    - nodes
+    - namespaces
+    verbs:
+    - get
+    - list
+    - patch
+    - update
+    - watch
+  - apiGroups:
+    - ""
+    resources:
+    - events
+    verbs:
+    - create  
+    - patch
+    - update    
+  - apiGroups:
+    - "network.openshift.io"
+    resources:
+    - netnamespaces
+    - hostsubnets
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
+{{- end }}

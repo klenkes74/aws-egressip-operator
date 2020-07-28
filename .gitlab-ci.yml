@@ -1,0 +1,125 @@
+stages:
+  - generated-resources
+  - lint
+  - test
+  - package
+  - release
+  - operator-lifecycle
+
+variables:
+  REPO_PREFIX: k8s-community
+  HTTP_PROXY: http://webproxy.comp.db.de:8080
+  HTTPS_PROXY: http://webproxy.comp.db.de:8080
+  NO_PROXY: 169.254.169.254,127.0.0.1,localhost,db.de,signintra.com,intranet.deutschebahn.com,intranet-test.deutschebahn.com,intranet.dbschenker.com,service.deutschebahn.com,dbplanet.deutschebahn.com,amazonaws.com,docker
+  GIT_SUBMODULE_STRATEGY: normal
+  ARTIFACTORY_HELM_REPO_STAGE_DEV: https://bahnhub.tech.rz.db.de/artifactory/dbcs-helm-stage-dev-local
+  ARTIFACTORY_HELM_REPO_RELEASE: https://bahnhub.tech.rz.db.de/artifactory/dbcs-helm-release-local
+
+.go-cache:
+  variables:
+    GOPATH: $CI_PROJECT_DIR/.go
+  before_script:
+    - mkdir -p .go
+  cache:
+    paths:
+      - .go/pkg/mod/
+
+.operator-job:
+  extends: .go-cache
+  image: dbcs-docker-prod-local.bahnhub.tech.rz.db.de/pipeline-operator-sdk:latest
+  tags:
+    - dev
+  before_script:
+    - source /usr/local/lib/build-lib.sh
+
+go-lint:
+  extends: .operator-job
+  stage: lint
+  tags:
+    - dev
+  script:
+    - goLint
+
+helm-lint:
+  stage: lint
+  image: rgbs-docker-release-local.bahnhub.tech.rz.db.de/ocdeployman
+  script:
+    - helm lint ./helm/aws-egressip-operator
+  tags:
+    - dev
+
+go-test:
+  extends: .operator-job
+  stage: test
+  coverage: /total:\s+\(statements\)\s+(\d+.\d+\%)/
+  script:
+    - goTestCoverage --covermode atomic
+  after_script:
+    - source /usr/local/lib/build-lib.sh
+    - goAggregateCoverage
+  tags:
+    - dev
+  dependencies:
+    - go-lint
+
+helm-package:
+  stage: package
+  image: rgbs-docker-release-local.bahnhub.tech.rz.db.de/ocdeployman
+  script:
+    - helm package ./helm/aws-egressip-operator --destination build
+  tags:
+    - dev
+  artifacts:
+    paths:
+      - build/
+    expire_in: 1 hour
+  dependencies:
+    - helm-lint
+
+release-helm-chart-repo-stage:
+  stage: release
+  image: rgbs-docker-release-local.bahnhub.tech.rz.db.de/ocdeployman
+  script:
+    - RESPONSE=$(curl -s -w '%{http_code}' -u${ARTIFACTORY_USER}:${ARTIFACTORY_API_KEY} -T build/${CI_PROJECT_NAME}*.tgz ${ARTIFACTORY_HELM_REPO_STAGE_DEV}/${CI_PROJECT_NAME}/)
+    - HTTP_CODE=$(tail -n1 <<< "$RESPONSE")
+    - echo "$RESPONSE"
+    - if [[ ${HTTP_CODE} != *"201"* ]];then exit 1; fi
+  tags:
+    - dev
+  dependencies:
+    - helm-package
+  except:
+    refs:
+      - tags
+
+release-helm-chart-repo-release:
+  stage: release
+  image: rgbs-docker-release-local.bahnhub.tech.rz.db.de/ocdeployman
+  script:
+    - RESPONSE=$(curl -s -w '%{http_code}' -u${ARTIFACTORY_USER}:${ARTIFACTORY_API_KEY} -T build/${CI_PROJECT_NAME}*.tgz ${ARTIFACTORY_HELM_REPO_RELEASE}/${CI_PROJECT_NAME}/)
+    - HTTP_CODE=$(tail -n1 <<< "$RESPONSE")
+    - echo "$RESPONSE"
+    - if [[ ${HTTP_CODE} != *"201"* ]];then exit 1; fi
+  tags:
+    - dev
+  dependencies:
+    - helm-package
+  except:
+    refs:
+      - tags
+  only:
+    - master
+
+operator-deploy:
+  extends: .operator-job
+  stage: release
+  services:
+    - docker:dind
+  script:
+    - operatorBuild
+    - dockerPushImage
+  tags:
+    - dev
+  dependencies:
+    - go-lint
+    - go-test

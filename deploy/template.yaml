@@ -1,0 +1,227 @@
+---
+kind: Template
+apiVersion: v1
+metadata:
+  name: 'aws-egressip-operator'
+  labels:
+    template: 'aws-egressip-operator'
+  annotations:
+    description: >-
+      A template to install the aws-egressip-operator to your cluster.
+    openshift.io/display-name: 'AWS EgressIP Operator'
+    openshift.io/documentation-url: 'https://github.com/klenkes74/aws-egressip-operator'
+    openshift.io/long-description: >-
+      The aws-egressip-operator is a small operator that manages the egressips on AWS side so the cluster admins may
+      add an annotation to the namespace and get either random IPs (in every available AZ) or the specified IPs (if
+      they are assignable to cluster compute nodes).
+    openshift.io/support-url: 'https://github.com/klenkes74/aws-egressip-operator/issues'
+    tags: 'operator,egressip,aws,amazonws'
+    template.openshift.io/bindable: 'false'
+parameters:
+  - name: CLUSTER_NAME
+    displayName: 'Cluster Name'
+    description: 'The name of the cluster (used in AWS tags like kubernetes.io/cluster/<cluster-name>=owned)'
+    required: true
+  - name: OPERATOR_NAMESPACE
+    value: 'openshift-aws-egressip-operator'
+    displayName: 'Namespace of the Operator'
+    description: 'The operator will be installed in this namespace. It has to exist already.'
+    required: true
+  - name: AWS_REGION
+    value: 'eu-central-1'
+    displayName: 'AWS Region'
+    description: 'The region your cluster is installed in. Will be needed for managing the AWS.'
+    required: true
+  - name: OPERATOR_IMAGE
+    value: 'quay.io/klenkes74/aws-egressip-operator:latest'
+    displayName: 'Operator Software to use'
+    description: 'The docker image to use.'
+    required: true
+  - name: OPERATOR_NAME
+    value: 'aws-egressip-operator'
+    displayName: 'The name of the operator in this cluster'
+    description: 'Please change only when you have conflicts and know what you do.'
+    required: true
+  - name: SERVICE_ACCOUNT_NAME
+    value: 'aws-egressip-operator'
+    displayName: 'Operator Service Account'
+    description: 'Please change only when you have conflicts and know what you do.'
+    required: true
+  - name: ROLE_NAME
+    value: 'aws-egressip-operator'
+    displayName: 'Operator Service Role Name'
+    description: 'Please change only when you have conflicts and know what you do.'
+    required: true
+objects:
+  - kind: ServiceAccount
+    apiVersion: v1
+    metadata:
+      namespace: ${OPERATOR_NAMESPACE}
+      name: ${SERVICE_ACCOUNT_NAME}
+  - kind: ClusterRole
+    apiVersion: rbac.authorization.k8s.io/v1
+    metadata:
+      name: ${ROLE_NAME}
+    rules:
+      - apiGroups:
+          - redhatcop.redhat.io
+        resources:
+          - egressips
+          - egressips/finalizers
+          - egressips/status
+        verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+      - apiGroups:
+          - ""
+        resources:
+          - secrets
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - ""
+        resources:
+          - nodes
+          - namespaces
+        verbs:
+          - get
+          - list
+          - patch
+          - update
+          - watch
+      - apiGroups:
+          - ""
+        resources:
+          - events
+        verbs:
+          - create
+          - patch
+          - update
+      - apiGroups:
+          - "network.openshift.io"
+        resources:
+          - netnamespaces
+          - hostsubnets
+        verbs:
+          - get
+          - list
+          - patch
+          - update
+          - watch
+  - kind: ClusterRoleBinding
+    apiVersion: rbac.authorization.k8s.io/v1
+    metadata:
+      name: ${ROLE_NAME}
+    subjects:
+      - kind: ServiceAccount
+        name: ${SERVICE_ACCOUNT_NAME}
+        namespace: ${OPERATOR_NAMESPACE}
+    roleRef:
+      kind: ClusterRole
+      name: ${ROLE_NAME}
+      apiGroup: rbac.authorization.k8s.io
+  - kind: Role
+    apiVersion: rbac.authorization.k8s.io/v1
+    metadata:
+      name: ${ROLE_NAME}
+      namespace: ${OPERATOR_NAMESPACE}
+    rules:
+      # leader election
+      - apiGroups:
+          - ""
+        resources:
+          - configmaps
+          - pods
+        verbs:
+          - "*"
+      #Metrics
+      - apiGroups:
+          - ""
+        resources:
+          - services
+          - services/finalizers
+        verbs:
+          - "*"
+      #Metrics
+      - apiGroups:
+          - "apps"
+        resources:
+          - replicasets
+          - deployments
+        verbs:
+          - "get"
+          - "list"
+      # Metrics
+      - apiGroups:
+          - monitoring.coreos.com
+        resources:
+          - servicemonitors
+        verbs:
+          - "get"
+          - "create"
+      # Metrics
+      - apiGroups:
+          - apps
+        resources:
+          - deployments/finalizers
+        resourceNames:
+          - aws-egressip-operator
+        verbs:
+          - "update"
+  - kind: RoleBinding
+    apiVersion: rbac.authorization.k8s.io/v1
+    metadata:
+      name: ${ROLE_NAME}
+    subjects:
+      - kind: ServiceAccount
+        name: ${SERVICE_ACCOUNT_NAME}
+        namespace: ${OPERATOR_NAMESPACE}
+    roleRef:
+      kind: Role
+      name: ${ROLE_NAME}
+      apiGroup: rbac.authorization.k8s.io
+  - kind: Deployment
+    apiVersion: apps/v1
+    metadata:
+      name: ${OPERATOR_NAME}
+      namespace: ${OPERATOR_NAMESPACE}
+      labels:
+        feature: egressip
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          name: ${OPERATOR_NAME}
+      template:
+        metadata:
+          labels:
+            name: aws-egressip-operator
+        spec:
+          serviceAccountName: ${SERVICE_ACCOUNT_NAME}
+          containers:
+            - name: aws-egressip-operator
+              # Replace this with the built image name
+              image: ${OPERATOR_IMAGE}
+              command:
+                - aws-egressip-operator
+              imagePullPolicy: Always
+              env:
+                - name: CLUSTER_NAME
+                  value: ${CLUSTER_NAME}
+                - name: WATCH_NAMESPACE
+                  value: ""
+                - name: POD_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.name
+                - name: OPERATOR_NAME
+                  value: ${OPERATOR_NAME}
+                - name: AWS_REGION
+                  value: ${AWS_REGION}
