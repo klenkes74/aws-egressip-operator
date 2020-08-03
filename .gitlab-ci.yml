@@ -7,11 +7,12 @@ stages:
   - operator-lifecycle
 
 variables:
-  REPO_PREFIX: k8s-community
+  REPO_PREFIX: dbcs
   HTTP_PROXY: http://webproxy.comp.db.de:8080
   HTTPS_PROXY: http://webproxy.comp.db.de:8080
   NO_PROXY: 169.254.169.254,127.0.0.1,localhost,db.de,signintra.com,intranet.deutschebahn.com,intranet-test.deutschebahn.com,intranet.dbschenker.com,service.deutschebahn.com,dbplanet.deutschebahn.com,amazonaws.com,docker
   GIT_SUBMODULE_STRATEGY: normal
+  ARTIFACTORY_REPO_PREFIX: dbcs
   ARTIFACTORY_HELM_REPO_STAGE_DEV: https://bahnhub.tech.rz.db.de/artifactory/dbcs-helm-stage-dev-local
   ARTIFACTORY_HELM_REPO_RELEASE: https://bahnhub.tech.rz.db.de/artifactory/dbcs-helm-release-local
 

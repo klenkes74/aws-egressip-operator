@@ -6,6 +6,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/klenkes74/egressip-ipam-operator/pkg/cloudprovider"
 	"github.com/klenkes74/egressip-ipam-operator/pkg/logger"
+	"github.com/klenkes74/egressip-ipam-operator/pkg/observability"
 	"github.com/klenkes74/egressip-ipam-operator/pkg/openshift"
 	v1 "github.com/openshift/api/network/v1"
 	"github.com/redhat-cop/operator-utils/pkg/util"
@@ -31,8 +32,9 @@ var _ reconcile.Reconciler = &reconcileHostsubnet{}
 type reconcileHostsubnet struct {
 	util.ReconcilerBase
 
-	cloud   cloudprovider.CloudProvider
-	handler openshift.EgressIPHandler
+	cloud    cloudprovider.CloudProvider
+	handler  openshift.EgressIPHandler
+	alarming observability.AlarmStore
 }
 
 // Add creates a new Namespace Controller and adds it to the Manager. The Manager will set fields on the Controller
@@ -48,6 +50,7 @@ func newReconciler(mgr manager.Manager, cloud *cloudprovider.CloudProvider) reco
 		ReconcilerBase: util.NewReconcilerBase(mgr.GetClient(), mgr.GetScheme(), mgr.GetConfig(), mgr.GetEventRecorderFor(controllerName)),
 		cloud:          *cloud,
 		handler:        *openshift.NewEgressIPHandler(*cloud, mgr.GetClient()),
+		alarming:       *observability.NewAlarmStore(),
 	}
 }
 
@@ -109,6 +112,12 @@ func (r *reconcileHostsubnet) Reconcile(request reconcile.Request) (reconcile.Re
 	} else {
 		changed, err = r.deleteHostSubnet(instance, reqLogger, changed)
 		if err != nil {
+			for _, ip := range instance.EgressIPs {
+				namespace := instance.GetAnnotations()[openshift.IPToNamespaceAnnotation+ip]
+				alarmIP := net.ParseIP(ip)
+				r.alarming.AddAlarm(namespace, []*net.IP{&alarmIP})
+			}
+
 			return reconcile.Result{}, err
 		}
 	}
@@ -141,10 +150,30 @@ func (r *reconcileHostsubnet) ensureIPs(instance *v1.HostSubnet, ips []*net.IP, 
 		reqLogger.Error(err, "problems with IPs. need to redistribute IPs")
 		_, err = r.handler.RedistributeIPsFromHost(instance)
 
+		if err != nil {
+			r.raiseAlarmForIPs(instance, ips)
+		} else {
+			r.cancelAlarmforIPs(instance, ips)
+		}
+
 		changed = true
 	}
 
 	return changed, err
+}
+
+func (r *reconcileHostsubnet) cancelAlarmforIPs(instance *v1.HostSubnet, ips []*net.IP) {
+	for _, ip := range ips {
+		namespace := instance.GetAnnotations()[openshift.IPToNamespaceAnnotation+ip.String()]
+		r.alarming.RemoveAlarmForIP(namespace, ip)
+	}
+}
+
+func (r *reconcileHostsubnet) raiseAlarmForIPs(instance *v1.HostSubnet, ips []*net.IP) {
+	for _, ip := range ips {
+		namespace := instance.GetAnnotations()[openshift.IPToNamespaceAnnotation+ip.String()]
+		r.alarming.AddAlarm(namespace, []*net.IP{ip})
+	}
 }
 
 func (r *reconcileHostsubnet) deleteHostSubnet(instance *v1.HostSubnet, reqLogger logr.Logger, changed bool) (bool, error) {
@@ -170,9 +199,12 @@ func (r *reconcileHostsubnet) deleteHostSubnet(instance *v1.HostSubnet, reqLogge
 				"egress-ips", ips,
 			)
 
+			r.raiseAlarmForIPs(instance, ips)
+
 			return changed, err
 		}
 
+		r.cancelAlarmforIPs(instance, ips)
 		for ip, host := range distribution {
 			reqLogger.Info("redistributed IP",
 				"ip", ip,

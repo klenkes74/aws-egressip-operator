@@ -5,8 +5,8 @@ MODULE ?= github.com/klenkes74/egress-ipam-operator
 REGISTRY ?= quay.io
 REPOSITORY ?= $(REGISTRY)/klenkes74/aws-egressip-operator
 
-VERSION := 1.0.0
-IMG := $(REPOSITORY):$(VERSION)-SNAPSHOT
+VERSION := 1.1.0
+IMG := $(REPOSITORY):$(VERSION)
 
 BUILD_COMMIT := $(shell ./scripts/build/get-build-commit.sh)
 BUILD_TIMESTAMP := $(shell ./scripts/build/get-build-timestamp.sh)
@@ -23,7 +23,7 @@ lint: generate fmt vet
 	golint ./pkg/... ./cmd/...
 
 test: lint generate fmt vet
-	go test ./pkg/... ./cmd/... -coverprofile cover.out
+	go test ./test/... -coverprofile cover.out
 
 # Build manager binary
 manager: test

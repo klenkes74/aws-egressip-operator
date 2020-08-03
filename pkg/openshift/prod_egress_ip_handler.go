@@ -2,6 +2,7 @@ package openshift
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/hashicorp/go-multierror"
 	"github.com/klenkes74/egressip-ipam-operator/pkg/cloudprovider"
@@ -15,6 +16,9 @@ import (
 	"strconv"
 	"strings"
 )
+
+// IPToNamespaceAnnotation -- Will be used to construct the IP-to-namespace annotation on hostSubnet in form of "egressip-ipam-operator.redhat-cop.io/<ip>=<namespace>"
+const IPToNamespaceAnnotation = "egressip-ipam-operator.redhat-cop.io/"
 
 var _ EgressIPHandler = &ProdEgressIPHandler{}
 
@@ -80,7 +84,7 @@ func (h *ProdEgressIPHandler) AddIPsToInfrastructure(namespace *corev1.Namespace
 
 	ipErrors = make([]error, 0)
 	for i, instance := range instances {
-		err = h.addIPToOcpNode(instance, ips[i])
+		err = h.addIPToOcpNode(instance, namespace.Name, ips[i])
 		if err != nil {
 			ipErrors = append(ipErrors, err)
 		}
@@ -117,13 +121,13 @@ func (h *ProdEgressIPHandler) getAnnotatedIPs(instance *corev1.Namespace) ([]*ne
 	return ips, nil
 }
 
-func (h *ProdEgressIPHandler) addIPToOcpNode(instanceID string, ip *net.IP) error {
+func (h *ProdEgressIPHandler) addIPToOcpNode(instanceID string, namespace string, ip *net.IP) error {
 	instance, err := h.cloud.Instance(instanceID)
 	if err != nil {
 		return err
 	}
 
-	err = h.addIPToHostSubnet(instance, ip)
+	err = h.addIPToHostSubnet(instance, namespace, ip)
 	if err != nil {
 		return err
 	}
@@ -131,7 +135,7 @@ func (h *ProdEgressIPHandler) addIPToOcpNode(instanceID string, ip *net.IP) erro
 	return nil
 }
 
-func (h *ProdEgressIPHandler) addIPToHostSubnet(instance *cloudprovider.CloudInstance, ip *net.IP) error {
+func (h *ProdEgressIPHandler) addIPToHostSubnet(instance *cloudprovider.CloudInstance, namespace string, ip *net.IP) error {
 	hostSubnet, err := h.loadHostSubnet((*instance).HostName())
 	if err != nil {
 		return err
@@ -148,6 +152,10 @@ func (h *ProdEgressIPHandler) addIPToHostSubnet(instance *cloudprovider.CloudIns
 
 	if !found {
 		hostSubnet.EgressIPs = append(hostSubnet.EgressIPs, ip.String())
+
+		annotations := hostSubnet.GetAnnotations()
+		annotations[IPToNamespaceAnnotation+ip.String()] = namespace
+
 		err := h.updateHostSubnet(hostSubnet)
 		if err != nil {
 			return err
@@ -387,7 +395,12 @@ func (h *ProdEgressIPHandler) RedistributeIPsFromHost(hostSubnet *ocpnetv1.HostS
 	}
 
 	for i, instance := range instances {
-		err := h.addIPToOcpNode(instance, ips[i])
+		namespace := hostSubnet.GetAnnotations()[IPToNamespaceAnnotation+ips[i].String()]
+		if len(namespace) == 0 {
+			ipErrors = append(ipErrors, errors.New("did not find namespace for ip '"+ips[i].String()+"'"))
+		}
+
+		err := h.addIPToOcpNode(instance, namespace, ips[i])
 		if err != nil {
 			log.Error(err, "could not add IP to OCP",
 				"instance", instance,

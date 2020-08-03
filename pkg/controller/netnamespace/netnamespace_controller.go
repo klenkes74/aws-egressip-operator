@@ -6,6 +6,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/klenkes74/egressip-ipam-operator/pkg/cloudprovider"
 	"github.com/klenkes74/egressip-ipam-operator/pkg/logger"
+	"github.com/klenkes74/egressip-ipam-operator/pkg/observability"
 	"github.com/klenkes74/egressip-ipam-operator/pkg/openshift"
 	v1 "github.com/openshift/api/network/v1"
 	"github.com/redhat-cop/egressip-ipam-operator/pkg/controller/egressipam"
@@ -32,8 +33,9 @@ var _ reconcile.Reconciler = &reconcileNetnamespace{}
 type reconcileNetnamespace struct {
 	util.ReconcilerBase
 
-	cloud   *cloudprovider.CloudProvider
-	handler openshift.EgressIPHandler
+	cloud    *cloudprovider.CloudProvider
+	handler  openshift.EgressIPHandler
+	alarming observability.AlarmStore
 }
 
 // Add creates a new Namespace Controller and adds it to the Manager. The Manager will set fields on the Controller
@@ -49,6 +51,7 @@ func newReconciler(mgr manager.Manager, cloud *cloudprovider.CloudProvider) reco
 		ReconcilerBase: util.NewReconcilerBase(mgr.GetClient(), mgr.GetScheme(), mgr.GetConfig(), mgr.GetEventRecorderFor(controllerName)),
 		cloud:          cloud,
 		handler:        *openshift.NewEgressIPHandler(*cloud, mgr.GetClient()),
+		alarming:       *observability.NewAlarmStore(),
 	}
 }
 
@@ -105,6 +108,8 @@ func (r *reconcileNetnamespace) Reconcile(request reconcile.Request) (reconcile.
 			return reconcile.Result{}, nil
 		}
 		// Error reading the object - requeue the request.
+
+		r.alarming.AddAlarm(request.Name, []*net.IP{})
 		return reconcile.Result{}, err
 	}
 
@@ -126,7 +131,8 @@ func (r *reconcileNetnamespace) Reconcile(request reconcile.Request) (reconcile.
 
 		err = r.GetClient().Update(context.TODO(), instance)
 		if err != nil {
-			reqLogger.Error(err, "cou")
+			reqLogger.Error(err, "could not save the netnamespace")
+
 		}
 	} else {
 		reqLogger.Info("Nothing to do for the netnamespace")
@@ -173,6 +179,8 @@ func (r *reconcileNetnamespace) workOnUpdate(instance *v1.NetNamespace, changed 
 		r.addIPsToAnnotation(instance, newips)
 		err = r.addSpecifiedIPsToNamespace(instance, reqLogger)
 		if err != nil {
+			r.alarming.AddAlarm(instance.Name, newips)
+
 			return changed, err
 		}
 
@@ -180,6 +188,7 @@ func (r *reconcileNetnamespace) workOnUpdate(instance *v1.NetNamespace, changed 
 			"ips.new", newips,
 		)
 
+		r.alarming.RemoveAlarm(instance.Name)
 		changed = true
 	} else {
 		r.removeFinalizer(instance)
@@ -225,6 +234,8 @@ func (r *reconcileNetnamespace) addSpecifiedIPsToNamespace(instance *v1.NetNames
 
 	err := r.handler.AddIPsToNetNamespace(instance, ips)
 	if err != nil {
+		r.alarming.AddAlarm(instance.Name, ips)
+
 		reqLogger.Error(err, "could not assign IPs to Netnamespace")
 		return err
 	}

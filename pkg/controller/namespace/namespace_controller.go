@@ -5,6 +5,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/klenkes74/egressip-ipam-operator/pkg/cloudprovider"
 	"github.com/klenkes74/egressip-ipam-operator/pkg/logger"
+	"github.com/klenkes74/egressip-ipam-operator/pkg/observability"
 	"github.com/klenkes74/egressip-ipam-operator/pkg/openshift"
 	ocpnetv1 "github.com/openshift/api/network/v1"
 	"github.com/redhat-cop/egressip-ipam-operator/pkg/controller/egressipam"
@@ -32,8 +33,9 @@ var _ reconcile.Reconciler = &reconcileNamespace{}
 type reconcileNamespace struct {
 	util.ReconcilerBase
 
-	cloud   *cloudprovider.CloudProvider
-	handler openshift.EgressIPHandler
+	cloud    *cloudprovider.CloudProvider
+	handler  openshift.EgressIPHandler
+	alarming observability.AlarmStore
 }
 
 // Add creates a new Namespace Controller and adds it to the Manager. The Manager will set fields on the Controller
@@ -50,6 +52,7 @@ func newReconciler(mgr manager.Manager, cloud *cloudprovider.CloudProvider) reco
 		ReconcilerBase: util.NewReconcilerBase(mgr.GetClient(), mgr.GetScheme(), mgr.GetConfig(), mgr.GetEventRecorderFor(controllerName)),
 		cloud:          cloud,
 		handler:        *openshift.NewEgressIPHandler(*cloud, mgr.GetClient()),
+		alarming:       *observability.NewAlarmStore(),
 	}
 }
 
@@ -191,11 +194,14 @@ func (r *reconcileNamespace) workOnUpdate(instance *corev1.Namespace, netnamespa
 		)
 		ips, err := r.addIPs(instance, netnamespace)
 		if err != nil {
+			r.alarming.AddAlarm(instance.Name, ips)
+
 			return changed, err
 		}
 
 		r.addFinalizer(instance, reqLogger)
 
+		r.alarming.RemoveAlarm(instance.Name)
 		reqLogger.Info("added ips",
 			"ips", ips)
 	}
