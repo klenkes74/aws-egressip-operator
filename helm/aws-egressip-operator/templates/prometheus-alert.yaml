@@ -13,7 +13,7 @@ spec:
       rules:
         - expr: "egressip_handling_failures > 1"
           annotations:
-            message: "Egress IPs of namespace '{{' \$labels.namespace '}}' are not working correctly."
+            message: {{ "Egress IPs of namespace {{ $labels.namespace }} are not working correctly." }}
           for: {{ .Values.alert.interval.alert }}
           labels:
             severity: critical
