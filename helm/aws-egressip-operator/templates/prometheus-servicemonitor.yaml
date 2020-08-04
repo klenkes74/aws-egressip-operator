@@ -5,7 +5,7 @@ metadata:
   namespace: openshift-monitoring
   name: {{ include "aws-egressip-operator.fullname" . }}
   labels:
-    k8s-app: {{ include "aws-egress-operator.fullname" . }}
+    k8s-app: {{ include "aws-egressip-operator.fullname" . }}
 spec:
   endpoints:
     - bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
