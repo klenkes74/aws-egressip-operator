@@ -14,10 +14,10 @@ spec:
       port: 8080
       protocol: TCP
       targetPort: 8080
-    - name: 8383-tcp
-      port: 8383
+    - name: 8081-tcp
+      port: 8081
       protocol: TCP
-      targetPort: 8383
+      targetPort: 8081
 
 
 

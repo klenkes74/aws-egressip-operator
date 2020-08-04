@@ -34,9 +34,8 @@ var log = logger.Log
 
 // Change below variables to serve metrics on different host or port.
 var (
-	metricsHost               = "0.0.0.0"
-	metricsPort         int32 = 8383
-	operatorMetricsPort int32 = 8686
+	metricsHost       = "0.0.0.0"
+	metricsPort int32 = 8081
 )
 
 func main() {
@@ -163,7 +162,6 @@ func addMetrics(ctx context.Context, cfg *rest.Config, operatorNs string) {
 	// Add to the below struct any other metrics ports you want to expose.
 	servicePorts := []corev1.ServicePort{
 		{Port: metricsPort, Name: metrics.OperatorPortName, Protocol: corev1.ProtocolTCP, TargetPort: intstr.IntOrString{Type: intstr.Int, IntVal: metricsPort}},
-		{Port: operatorMetricsPort, Name: metrics.CRPortName, Protocol: corev1.ProtocolTCP, TargetPort: intstr.IntOrString{Type: intstr.Int, IntVal: operatorMetricsPort}},
 	}
 
 	// Create Service object to expose the metrics port(s).

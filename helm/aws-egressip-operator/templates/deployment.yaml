@@ -18,6 +18,7 @@ spec:
     {{- end }}
       labels:
         {{- include "aws-egressip-operator.selectorLabels" . | nindent 8 }}
+        monitored: "true"
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -53,8 +54,8 @@ spec:
             - name: 8080-tcp
               containerPort: 8080
               protocol: TCP
-            - name: 8383-tcp
-              containerPort: 8383
+            - name: 8081-tcp
+              containerPort: 8081
               protocol: TCP
       {{- with .Values.nodeSelector }}
       nodeSelector:
