@@ -11,10 +11,9 @@ spec:
   groups:
     - name: {{ include "aws-egressip-operator.fullname" . }}.rules
       rules:
-        - expr: "egressip_handle_failure > 1"
+        - expr: "egressip_handling_failures > 1"
           annotations:
-            message: >
-              Egress IPs of namespace '{{' $labels.namespace '}}' are not working correctly.
+            message: "Egress IPs of namespace '{{' \$labels.namespace '}}' are not working correctly."
           for: {{ .Values.alert.interval.alert }}
           labels:
             severity: critical
