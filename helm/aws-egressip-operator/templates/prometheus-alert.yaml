@@ -1,0 +1,21 @@
+{{- if .Values.alert.create }}
+kind: PrometheusRule
+apiVersion: monitoring.coreos.com/v1
+metadata:
+  namespace: openshift-monitoring
+  name: prometheus-{{ include "aws-egressip-operator.fullname" . }}-rules
+  labels:
+    prometheus: k8s
+    role: alert-rules
+spec:
+  groups:
+    - name: {{ include "aws-egressip-operator.fullname" . }}.rules
+      rules:
+        - expr: "egressip_handle_failure > 1"
+          annotations:
+            message: >
+              Egress IPs of namespace '{{' $labels.namespace '}}' are not working correctly.
+          for: {{ .Values.alert.interval.alert }}
+          labels:
+            severity: critical
+{{- end }}

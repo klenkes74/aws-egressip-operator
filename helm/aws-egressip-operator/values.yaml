@@ -5,10 +5,10 @@
 replicaCount: 1
 
 image:
-  repository: k8s-community-docker-release-local.bahnhub.tech.rz.db.de/aws-egressip-operator
+  repository: dbcs-docker-release-local.bahnhub.tech.rz.db.de/aws-egressip-operator
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
-  tag: "1.0.0"
+  tag: "1.1.0"
 
 imagePullSecrets: []
 nameOverride: ""
@@ -32,6 +32,13 @@ serviceAccount:
 ##
 rbac:
   create: true
+
+alert:
+  create: true
+  interval:
+    scrape: 1m
+    alert: 10m
+
 
 podAnnotations: {}
 

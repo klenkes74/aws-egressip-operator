@@ -48,4 +48,31 @@
 2. Get AWS Network interfaces with IP addresses
 3. Diff AWS and OCP IP interfaces.
 4. If AWS is missing -> Configure AWS
-5. If AWS has more IPs -> remove them
+
+# Troubleshooting
+In case a problem with IPs and a namespace exist, the metric egress_handle_failure{namespace=<namespace>} will get a 
+positive integer value (it's a gauge counting the failures). As soon as the problem is solved, the gauge will be set to
+zero.
+
+So you know the namespace which has problems. Now the following checks have to be done:
+
+## Checklist for an EgressIP problem
+1. Are the annotations still valid on the namespace?
+
+   If they are missing - re-add them.
+
+1. Are the annotations still valid on the netnamespace?
+
+   If they are missing - re-add them
+
+1. Are the EgressIPs set on the netnamespace?
+
+   If they are missing - re-add them
+
+1. Are the hostsubnets configured with all ips (jsonpath .egressIPs)?
+
+   If they are missing - re-add them
+
+1. Do the hosts in AWS have the IPs as secondary IPs on the interfache eth0?
+
+   If they are missing - re-add them (you could use the web UI)

@@ -1,0 +1,22 @@
+{{- if .Values.alert.create }}
+kind: ServiceMonitor
+apiVersion: monitoring.coreos.com/v1
+metadata:
+  namespace: openshift-monitoring
+  name: {{ include "aws-egressip-operator.fullname" . }}
+  labels:
+    k8s-app: {{ include "aws-egress-operator.fullname" . }}
+spec:
+  endpoints:
+    - bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      interval: {{ .Values.alert.interval.scrape }}
+      port: 8383-tcp
+      scheme: http
+      path: /metrics
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      {{- include "aws-egressip-operator.selectorLabels" . | nindent 6 }}
+  {{- end }}

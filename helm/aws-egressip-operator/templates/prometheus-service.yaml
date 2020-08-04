@@ -1,0 +1,25 @@
+kind: Service
+apiVersion: v1
+metadata:
+  metadata:
+    name: {{ include "aws-egressip-operator.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+    labels:
+      {{- include "aws-egressip-operator.labels" . | nindent 8 }}
+spec:
+  selector:
+    {{- include "aws-egressip-operator.labels" . | nindent 4 }}
+  ports:
+    - name: 8080-tcp
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+    - name: 8383-tcp
+      port: 8383
+      protocol: TCP
+      targetPort: 8383
+
+
+
+
+
