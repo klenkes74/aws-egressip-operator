@@ -105,16 +105,12 @@ func createManager(cfg *rest.Config, namespace string) manager.Manager {
 	metricsBindAddress := fmt.Sprintf("%s:%d", metricsHost, metricsPort)
 	log.Info("Starting kubemetrics",
 		"metricsBindAddress", metricsBindAddress,
-		"livenessProbe", "healthz",
-		"readinessProbe", "readyz",
 	)
 	mgr, err := manager.New(cfg, manager.Options{
-		Namespace:              namespace,
-		MetricsBindAddress:     metricsBindAddress,
-		Host:                   metricsHost,
-		Port:                   int(metricsPort),
-		ReadinessEndpointName:  "readyz",
-		HealthProbeBindAddress: "healthz",
+		Namespace:          namespace,
+		MetricsBindAddress: metricsBindAddress,
+		Host:               metricsHost,
+		Port:               int(metricsPort),
 	})
 	if err != nil {
 		log.Error(err, "Can't create manager")
