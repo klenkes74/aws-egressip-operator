@@ -102,9 +102,19 @@ func becomeLeader(ctx context.Context, lockname string) {
 
 func createManager(cfg *rest.Config, namespace string) manager.Manager {
 	// Create a new Cmd to provide shared dependencies and start components
+	metricsBindAddress := fmt.Sprintf("%s:%d", metricsHost, metricsPort)
+	log.Info("Starting kubemetrics",
+		"metricsBindAddress", metricsBindAddress,
+		"livenessProbe", "healthz",
+		"readinessProbe", "readyz",
+	)
 	mgr, err := manager.New(cfg, manager.Options{
-		Namespace:          namespace,
-		MetricsBindAddress: fmt.Sprintf("%s:%d", metricsHost, metricsPort),
+		Namespace:              namespace,
+		MetricsBindAddress:     metricsBindAddress,
+		Host:                   metricsHost,
+		Port:                   int(metricsPort),
+		ReadinessEndpointName:  "readyz",
+		HealthProbeBindAddress: "healthz",
 	})
 	if err != nil {
 		log.Error(err, "Can't create manager")
