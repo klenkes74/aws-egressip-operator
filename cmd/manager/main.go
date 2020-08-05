@@ -203,6 +203,7 @@ func serveCRMetrics(cfg *rest.Config, operatorNs string) error {
 
 	// The metrics will be generated from the namespaces which are returned here.
 	// NOTE that passing nil or an empty list of namespaces in GenerateAndServeCRMetrics will result in an error.
+	log.Info("Starting kubemetrics", "metricsHost", metricsHost, "metricsPort", metricsPort)
 	err := kubemetrics.GenerateAndServeCRMetrics(cfg, []string{operatorNs}, filteredGVK, metricsHost, metricsPort)
 	if err != nil {
 		return err

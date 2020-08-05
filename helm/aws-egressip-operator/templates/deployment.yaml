@@ -57,6 +57,9 @@ spec:
             - name: 8081-tcp
               containerPort: 8081
               protocol: TCP
+            - name: 8383-tcp
+              containerPort: 8383
+              protocol: TCP
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
