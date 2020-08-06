@@ -1,7 +1,7 @@
 package controller
 
 import (
-	"github.com/klenkes74/egressip-ipam-operator/pkg/cloudprovider"
+	"github.com/klenkes74/aws-egressip-operator/pkg/cloudprovider"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 

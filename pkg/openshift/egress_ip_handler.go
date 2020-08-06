@@ -1,8 +1,8 @@
 package openshift
 
 import (
-	"github.com/klenkes74/egressip-ipam-operator/pkg/cloudprovider"
-	"github.com/klenkes74/egressip-ipam-operator/pkg/logger"
+	"github.com/klenkes74/aws-egressip-operator/pkg/cloudprovider"
+	"github.com/klenkes74/aws-egressip-operator/pkg/logger"
 	ocpnetv1 "github.com/openshift/api/network/v1"
 	corev1 "k8s.io/api/core/v1"
 	"net"

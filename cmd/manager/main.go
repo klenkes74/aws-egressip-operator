@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/klenkes74/egressip-ipam-operator/pkg/logger"
+	"github.com/klenkes74/aws-egressip-operator/pkg/logger"
 	kubemetrics "github.com/operator-framework/operator-sdk/pkg/kube-metrics"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -14,8 +14,8 @@ import (
 
 	"runtime"
 
-	"github.com/klenkes74/egressip-ipam-operator/pkg/controller"
-	"github.com/klenkes74/egressip-ipam-operator/version"
+	"github.com/klenkes74/aws-egressip-operator/pkg/controller"
+	"github.com/klenkes74/aws-egressip-operator/version"
 	ocpnetv1 "github.com/openshift/api/network/v1"
 	"github.com/operator-framework/operator-sdk/pkg/k8sutil"
 	"github.com/operator-framework/operator-sdk/pkg/leader"
@@ -45,6 +45,7 @@ func main() {
 	mgr := createManager(cfg, namespace)
 	registerComponents(mgr)
 	setupControllers(mgr)
+	_ = serveCRMetrics(cfg, namespace)
 	startManager(mgr)
 }
 

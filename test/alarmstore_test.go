@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/klenkes74/egressip-ipam-operator/pkg/observability"
+	"github.com/klenkes74/aws-egressip-operator/pkg/observability"
 	"net"
 	"reflect"
 	"testing"

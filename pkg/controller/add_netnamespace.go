@@ -1,7 +1,7 @@
 package controller
 
 import (
-	"github.com/klenkes74/egressip-ipam-operator/pkg/controller/netnamespace"
+	"github.com/klenkes74/aws-egressip-operator/pkg/controller/netnamespace"
 )
 
 func init() {

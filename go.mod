@@ -1,4 +1,4 @@
-module github.com/klenkes74/egressip-ipam-operator
+module github.com/klenkes74/aws-egressip-operator
 
 go 1.13
 

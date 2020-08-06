@@ -1,7 +1,7 @@
 package observability
 
 import (
-	"github.com/klenkes74/egressip-ipam-operator/pkg/logger"
+	"github.com/klenkes74/aws-egressip-operator/pkg/logger"
 	"github.com/prometheus/client_golang/prometheus"
 	"net"
 	"reflect"

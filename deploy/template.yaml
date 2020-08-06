@@ -27,13 +27,18 @@ parameters:
     displayName: 'Namespace of the Operator'
     description: 'The operator will be installed in this namespace. It has to exist already.'
     required: true
+  - name: MONITORING_NAMESPACE
+    value: 'openshift-monitoring'
+    displayName: 'Namespace of Prometheus'
+    description: 'The operator monitoring will be installed in this namespace. It has to exist already.'
+    required: true
   - name: AWS_REGION
     value: 'eu-central-1'
     displayName: 'AWS Region'
     description: 'The region your cluster is installed in. Will be needed for managing the AWS.'
     required: true
   - name: OPERATOR_IMAGE
-    value: 'quay.io/klenkes74/aws-egressip-operator:latest'
+    value: 'quay.io/klenkes74/aws-egressip-operator:1.1.1'
     displayName: 'Operator Software to use'
     description: 'The docker image to use.'
     required: true
@@ -53,175 +58,291 @@ parameters:
     description: 'Please change only when you have conflicts and know what you do.'
     required: true
 objects:
+- kind: ServiceAccount
+  apiVersion: v1
+  metadata:
+    namespace: ${OPERATOR_NAMESPACE}
+    name: ${SERVICE_ACCOUNT_NAME}
+- kind: ClusterRole
+  apiVersion: rbac.authorization.k8s.io/v1
+  metadata:
+    name: ${ROLE_NAME}
+  rules:
+  - apiGroups:
+    - redhatcop.redhat.io
+    resources:
+    - egressips
+    - egressips/finalizers
+    - egressips/status
+    verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+  - apiGroups:
+    - ""
+    resources:
+    - secrets
+    verbs:
+    - get
+    - list
+    - watch
+  - apiGroups:
+    - ""
+    resources:
+    - nodes
+    - namespaces
+    verbs:
+    - get
+    - list
+    - patch
+    - update
+    - watch
+  - apiGroups:
+    - ""
+    resources:
+    - events
+    verbs:
+    - create
+    - patch
+    - update
+  - apiGroups:
+    - "network.openshift.io"
+    resources:
+    - netnamespaces
+    - hostsubnets
+    verbs:
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- kind: ClusterRoleBinding
+  apiVersion: rbac.authorization.k8s.io/v1
+  metadata:
+    name: ${ROLE_NAME}
+  subjects:
   - kind: ServiceAccount
-    apiVersion: v1
-    metadata:
-      namespace: ${OPERATOR_NAMESPACE}
-      name: ${SERVICE_ACCOUNT_NAME}
-  - kind: ClusterRole
-    apiVersion: rbac.authorization.k8s.io/v1
-    metadata:
-      name: ${ROLE_NAME}
-    rules:
-      - apiGroups:
-          - redhatcop.redhat.io
-        resources:
-          - egressips
-          - egressips/finalizers
-          - egressips/status
-        verbs:
-          - create
-          - delete
-          - get
-          - list
-          - patch
-          - update
-          - watch
-      - apiGroups:
-          - ""
-        resources:
-          - secrets
-        verbs:
-          - get
-          - list
-          - watch
-      - apiGroups:
-          - ""
-        resources:
-          - nodes
-          - namespaces
-        verbs:
-          - get
-          - list
-          - patch
-          - update
-          - watch
-      - apiGroups:
-          - ""
-        resources:
-          - events
-        verbs:
-          - create
-          - patch
-          - update
-      - apiGroups:
-          - "network.openshift.io"
-        resources:
-          - netnamespaces
-          - hostsubnets
-        verbs:
-          - get
-          - list
-          - patch
-          - update
-          - watch
-  - kind: ClusterRoleBinding
-    apiVersion: rbac.authorization.k8s.io/v1
-    metadata:
-      name: ${ROLE_NAME}
-    subjects:
-      - kind: ServiceAccount
-        name: ${SERVICE_ACCOUNT_NAME}
-        namespace: ${OPERATOR_NAMESPACE}
-    roleRef:
-      kind: ClusterRole
-      name: ${ROLE_NAME}
-      apiGroup: rbac.authorization.k8s.io
-  - kind: Role
-    apiVersion: rbac.authorization.k8s.io/v1
-    metadata:
-      name: ${ROLE_NAME}
-      namespace: ${OPERATOR_NAMESPACE}
-    rules:
-      # leader election
-      - apiGroups:
-          - ""
-        resources:
-          - configmaps
-          - pods
-        verbs:
-          - "*"
-      #Metrics
-      - apiGroups:
-          - ""
-        resources:
-          - services
-          - services/finalizers
-        verbs:
-          - "*"
-      #Metrics
-      - apiGroups:
-          - "apps"
-        resources:
-          - replicasets
-          - deployments
-        verbs:
-          - "get"
-          - "list"
-      # Metrics
-      - apiGroups:
-          - monitoring.coreos.com
-        resources:
-          - servicemonitors
-        verbs:
-          - "get"
-          - "create"
-      # Metrics
-      - apiGroups:
-          - apps
-        resources:
-          - deployments/finalizers
-        resourceNames:
-          - aws-egressip-operator
-        verbs:
-          - "update"
-  - kind: RoleBinding
-    apiVersion: rbac.authorization.k8s.io/v1
-    metadata:
-      name: ${ROLE_NAME}
-    subjects:
-      - kind: ServiceAccount
-        name: ${SERVICE_ACCOUNT_NAME}
-        namespace: ${OPERATOR_NAMESPACE}
-    roleRef:
-      kind: Role
-      name: ${ROLE_NAME}
-      apiGroup: rbac.authorization.k8s.io
-  - kind: Deployment
-    apiVersion: apps/v1
-    metadata:
-      name: ${OPERATOR_NAME}
-      namespace: ${OPERATOR_NAMESPACE}
-      labels:
-        feature: egressip
-    spec:
-      replicas: 1
-      selector:
-        matchLabels:
+    name: ${SERVICE_ACCOUNT_NAME}
+    namespace: ${OPERATOR_NAMESPACE}
+  roleRef:
+    kind: ClusterRole
+    name: ${ROLE_NAME}
+    apiGroup: rbac.authorization.k8s.io
+- kind: Role
+  apiVersion: rbac.authorization.k8s.io/v1
+  metadata:
+    name: ${ROLE_NAME}
+    namespace: ${OPERATOR_NAMESPACE}
+  rules:
+  # leader election
+  - apiGroups:
+    - ""
+    resources:
+    - configmaps
+    - pods
+    verbs:
+    - "*"
+  #Metrics
+  - apiGroups:
+    - ""
+    resources:
+    - services
+    - services/finalizers
+    verbs:
+    - "*"
+  #Metrics
+  - apiGroups:
+    - "apps"
+    resources:
+    - replicasets
+    - deployments
+    verbs:
+    - "get"
+    - "list"
+  # Metrics
+  - apiGroups:
+    - monitoring.coreos.com
+    resources:
+    - servicemonitors
+    verbs:
+    - "get"
+    - "create"
+  # Metrics
+  - apiGroups:
+    - apps
+    resources:
+    - deployments/finalizers
+    resourceNames:
+    - aws-egressip-operator
+    verbs:
+    - "update"
+- kind: RoleBinding
+  apiVersion: rbac.authorization.k8s.io/v1
+  metadata:
+    name: ${ROLE_NAME}
+  subjects:
+  - kind: ServiceAccount
+    name: ${SERVICE_ACCOUNT_NAME}
+    namespace: ${OPERATOR_NAMESPACE}
+  roleRef:
+    kind: Role
+    name: ${ROLE_NAME}
+    apiGroup: rbac.authorization.k8s.io
+- kind: Deployment
+  apiVersion: apps/v1
+  metadata:
+    name: ${OPERATOR_NAME}
+    namespace: ${OPERATOR_NAMESPACE}
+    labels:
+      feature: egressip
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        name: ${OPERATOR_NAME}
+    template:
+      metadata:
+        labels:
           name: ${OPERATOR_NAME}
-      template:
-        metadata:
-          labels:
-            name: aws-egressip-operator
-        spec:
-          serviceAccountName: ${SERVICE_ACCOUNT_NAME}
-          containers:
-            - name: aws-egressip-operator
-              # Replace this with the built image name
-              image: ${OPERATOR_IMAGE}
-              command:
-                - aws-egressip-operator
-              imagePullPolicy: Always
-              env:
-                - name: CLUSTER_NAME
-                  value: ${CLUSTER_NAME}
-                - name: WATCH_NAMESPACE
-                  value: ""
-                - name: POD_NAME
-                  valueFrom:
-                    fieldRef:
-                      fieldPath: metadata.name
-                - name: OPERATOR_NAME
-                  value: ${OPERATOR_NAME}
-                - name: AWS_REGION
-                  value: ${AWS_REGION}
+          monitored: "true"
+      spec:
+        serviceAccountName: ${SERVICE_ACCOUNT_NAME}
+        containers:
+        - name: aws-egressip-operator
+          # Replace this with the built image name
+          image: ${OPERATOR_IMAGE}
+          command:
+          - aws-egressip-operator
+          imagePullPolicy: IfNotPresent
+          env:
+          - name: CLUSTER_NAME
+            value: ${CLUSTER_NAME}
+          - name: WATCH_NAMESPACE
+            value: ""
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          - name: OPERATOR_NAME
+            value: ${OPERATOR_NAME}
+          - name: AWS_REGION
+            value: ${AWS_REGION}
+          resources:
+            limits:
+              memory: 50Mi
+              cpu: 20m
+            requests:
+              memory: 50Mi
+              cpu: 20m
+- kind: NetworkPolicy
+  apiVersion: networking.k8s.io/v1
+  metadata:
+    namespace: ${OPERATOR_NAMESPACE}
+    name: prometheus-k8s
+    labels:
+      prometheus: k8s
+  spec:
+    ingress:
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            openshift.io/cluster-monitoring: "true"
+      ports:
+      - port: 8081
+        protocol: TCP
+    podSelector:
+      matchLabels:
+        monitored: "true"
+    policyTypes:
+    - Ingress
+- kind: Service
+  apiVersion: v1
+  metadata:
+    name: ${OPERATOR_NAME}
+    namespace: ${OPERATOR_NAMESPACE}
+     labels:
+       name: ${OPERATOR_NAME}
+     spec:
+       selector:
+         name: ${OPERATOR_NAME}
+       ports:
+       - name: 8081-tcp
+         port: 8081
+         protocol: TCP
+         targetPort: 8081
+- kind: ServiceMonitor
+  apiVersion: monitoring.coreos.com/v1
+  metadata:
+    namespace: ${MONITORING_NAMESPACE}
+    name: ${OPERATOR_NAME}
+    labels:
+      k8s-app:  ${OPERATOR_NAME}
+      name: ${OPERATOR_NAME}
+  spec:
+    endpoints:
+      - bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+        interval: 1m
+        honorLabels: true
+        port: 8081-tcp
+        scheme: http
+        path: /metrics
+    namespaceSelector:
+      matchNames:
+        - ${OPERATOR_NAMESPACE}
+    selector:
+      matchLabels:
+        name: ${OPERATOR_NAME}
+- kind: PrometheusRule
+  apiVersion: monitoring.coreos.com/v1
+  metadata:
+    namespace: ${MONITORING_NAMESPACE}
+    name: ${OPERATOR_NAME}
+    labels:
+      prometheus: k8s
+      role: alert-rules
+  spec:
+    groups:
+      - name: ${OPERATOR_NAME}.rules
+        rules:
+          - alert: EgressIPFailure
+            expr: "egressip_handling_failures > 1"
+            annotations:
+              message: {{ "Egress IPs of namespace {{ $labels.namespace }} are not working correctly." }}
+            for: {{ .Values.alert.interval.alert }}
+            labels:
+              severity: critical
+- kind: ClusterRole
+  apiVersion: rbac.authorization.k8s.io/v1
+  metadata:
+    name: monitor-${OPERATOR_NAME}
+  rules:
+  - apiGroups:
+    - ""
+    resources:
+    - nodes/metrics
+    - namespaces
+    - services
+    - endpoints
+    - pods
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs:
+    - "/metrics"
+    verbs: ["get", "list", "watch"]
+- kind: ClusterRoleBinding
+  apiVersion: authorization.openshift.io/v1
+  metadata:
+    name: monitor-${OPERATOR_NAME}
+  roleRef:
+    kind: ClusterRole
+    name: monitor-${OPERATOR_NAME}
+  subjects:
+  - kind: ServiceAccount
+    name: prometheus-k8s
+    namespace: ${MONITORING_NAMESPACE}
+  groupNames: []
+  userNames:
+  - system:serviceaccount:${MONITORING_NAMESPACE}:prometheus-k8s

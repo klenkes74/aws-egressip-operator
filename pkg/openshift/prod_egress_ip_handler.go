@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/hashicorp/go-multierror"
-	"github.com/klenkes74/egressip-ipam-operator/pkg/cloudprovider"
+	"github.com/klenkes74/aws-egressip-operator/pkg/cloudprovider"
 	ocpnetv1 "github.com/openshift/api/network/v1"
 	"github.com/redhat-cop/egressip-ipam-operator/pkg/controller/egressipam"
 	corev1 "k8s.io/api/core/v1"

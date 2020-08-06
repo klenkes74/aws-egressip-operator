@@ -1,11 +1,11 @@
 
 # Image URL to use all building/pushing image targets
 NAME ?= aws-egressip-operator
-MODULE ?= github.com/klenkes74/egress-ipam-operator
+MODULE ?= github.com/klenkes74/aws-egressip-operator
 REGISTRY ?= quay.io
 REPOSITORY ?= $(REGISTRY)/klenkes74/aws-egressip-operator
 
-VERSION := 1.1.0
+VERSION := 1.1.1
 IMG := $(REPOSITORY):$(VERSION)
 
 BUILD_COMMIT := $(shell ./scripts/build/get-build-commit.sh)
@@ -27,7 +27,7 @@ test: lint generate fmt vet
 
 # Build manager binary
 manager: test
-	go build -o build/_output/bin/$(NAME)  -ldflags $(LDFLAGS) github.com/klenkes74/egressip-ipam-operator/cmd/manager
+	go build -o build/_output/bin/$(NAME)  -ldflags $(LDFLAGS) github.com/klenkes74/aws-egressip-operator/cmd/manager
 
 # Run against the configured Kubernetes cluster in ~/.kube/config
 run: generate fmt vet
