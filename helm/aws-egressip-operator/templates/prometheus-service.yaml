@@ -1,26 +1,18 @@
 kind: Service
 apiVersion: v1
 metadata:
-  name: {{ include "aws-egressip-operator.fullname" . }}
-  namespace: {{ .Release.Namespace }}
+  name: {{ include "aws-egressip-operator.fullname" . namespace: {{ .Release.Namespace }}
   labels:
     {{- include "aws-egressip-operator.labels" . | nindent 4 }}
 spec:
   selector:
-    {{- include "aws-egressip-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/instance: {{ include "aws-egressip-operator.fullname" . }}
+    app.kubernetes.io/name: {{ include "aws-egressip-operator.fullname" . }}
   ports:
-    - name: 8080-tcp
-      port: 8080
-      protocol: TCP
-      targetPort: 8080
     - name: 8081-tcp
       port: 8081
       protocol: TCP
       targetPort: 8081
-    - name: 8383-tcp
-      port: 8383
-      protocol: TCP
-      targetPort: 8383
 
 
 
