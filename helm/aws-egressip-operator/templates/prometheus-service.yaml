@@ -1,7 +1,8 @@
 kind: Service
 apiVersion: v1
 metadata:
-  name: {{ include "aws-egressip-operator.fullname" . namespace: {{ .Release.Namespace }}
+  name: {{ include "aws-egressip-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "aws-egressip-operator.labels" . | nindent 4 }}
 spec:
