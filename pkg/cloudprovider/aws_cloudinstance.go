@@ -47,11 +47,6 @@ func (a AwsInstance) HostName() string {
 	return *a.instance.PrivateDnsName
 }
 
-// MachineSet returns the machine set id of the instance
-func (a AwsInstance) MachineSet() string {
-	return a.tags["aws:autoscaling:groupName"]
-}
-
 // FailureRegion returns the failure region of the cloud instance
 func (a AwsInstance) FailureRegion() string {
 	result := *a.instance.Placement.AvailabilityZone
@@ -93,9 +88,11 @@ func (a AwsInstance) PrimaryIP() *net.IP {
 // SecondaryIps returns the secondary IPs of the cloud instance
 func (a AwsInstance) SecondaryIps() []*net.IP {
 	result := make([]*net.IP, 0)
-	for _, ip := range a.instance.NetworkInterfaces[0].PrivateIpAddresses[1:len(a.instance.NetworkInterfaces[0].PrivateIpAddresses)] {
-		netIP := net.ParseIP(*ip.PrivateIpAddress)
-		result = append(result, &netIP)
+	if len(a.instance.NetworkInterfaces[0].PrivateIpAddresses) > 1 {
+		for _, ip := range a.instance.NetworkInterfaces[0].PrivateIpAddresses[1:len(a.instance.NetworkInterfaces[0].PrivateIpAddresses)] {
+			netIP := net.ParseIP(*ip.PrivateIpAddress)
+			result = append(result, &netIP)
+		}
 	}
 	return result
 }

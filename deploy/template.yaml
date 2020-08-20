@@ -38,7 +38,7 @@ parameters:
     description: 'The region your cluster is installed in. Will be needed for managing the AWS.'
     required: true
   - name: OPERATOR_IMAGE
-    value: 'quay.io/klenkes74/aws-egressip-operator:1.1.1'
+    value: 'quay.io/klenkes74/aws-egressip-operator:1.1.2'
     displayName: 'Operator Software to use'
     description: 'The docker image to use.'
     required: true

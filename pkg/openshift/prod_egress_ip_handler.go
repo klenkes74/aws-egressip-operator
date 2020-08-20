@@ -12,7 +12,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"net"
 	"reflect"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"strconv"
 	"strings"
 )
@@ -24,7 +23,7 @@ var _ EgressIPHandler = &ProdEgressIPHandler{}
 
 // ProdEgressIPHandler The AWS/OCP implementation of the EgressIPHandler
 type ProdEgressIPHandler struct {
-	client client.Client
+	client OcpClient
 	cloud  cloudprovider.CloudProvider
 }
 
@@ -47,7 +46,7 @@ func (h *ProdEgressIPHandler) CheckIPsForHost(hostSubnet *ocpnetv1.HostSubnet, i
 	found := 0
 	for _, subnetIP := range ips {
 		for _, instanceIP := range awsIps {
-			if reflect.DeepEqual(subnetIP, instanceIP) {
+			if subnetIP.Equal(*instanceIP) {
 				found++
 			}
 		}
@@ -136,7 +135,7 @@ func (h *ProdEgressIPHandler) addIPToOcpNode(instanceID string, namespace string
 }
 
 func (h *ProdEgressIPHandler) addIPToHostSubnet(instance *cloudprovider.CloudInstance, namespace string, ip *net.IP) error {
-	hostSubnet, err := h.loadHostSubnet((*instance).HostName())
+	hostSubnet, err := h.LoadHostSubnet((*instance).HostName())
 	if err != nil {
 		return err
 	}
@@ -156,7 +155,7 @@ func (h *ProdEgressIPHandler) addIPToHostSubnet(instance *cloudprovider.CloudIns
 		annotations := hostSubnet.GetAnnotations()
 		annotations[IPToNamespaceAnnotation+ip.String()] = namespace
 
-		err := h.updateHostSubnet(hostSubnet)
+		err := h.SaveHostSubnet(hostSubnet)
 		if err != nil {
 			return err
 		}
@@ -164,21 +163,6 @@ func (h *ProdEgressIPHandler) addIPToHostSubnet(instance *cloudprovider.CloudIns
 
 	log.Info(fmt.Sprintf("added ip '%s' to instanceId '%s' via hostSubnet '%s'", ip.String(), (*instance).ID(), hostSubnet.GetName()))
 	return nil
-}
-
-func (h *ProdEgressIPHandler) loadHostSubnet(instance string) (*ocpnetv1.HostSubnet, error) {
-	result := &ocpnetv1.HostSubnet{}
-	err := h.client.Get(context.TODO(), types.NamespacedName{Name: instance}, result)
-	if err != nil {
-		log.Error(err, "unable to retrieve", "hostSubnet", instance)
-		return result, err
-	}
-
-	return result, nil
-}
-
-func (h *ProdEgressIPHandler) updateHostSubnet(subnet *ocpnetv1.HostSubnet) error {
-	return h.client.Update(context.TODO(), subnet)
 }
 
 func (h *ProdEgressIPHandler) addSpecifiedIPsToCloudProvider(ips []*net.IP) ([]string, error) {
@@ -251,7 +235,7 @@ func (h *ProdEgressIPHandler) RemoveIPsFromInfrastructure(netNamespace *ocpnetv1
 }
 
 func (h *ProdEgressIPHandler) removeIPFromHostSubnet(instance cloudprovider.CloudInstance, ip *net.IP) error {
-	hostSubnet, err := h.loadHostSubnet(instance.HostName())
+	hostSubnet, err := h.LoadHostSubnet(instance.HostName())
 	if err != nil {
 		return err
 	}
@@ -277,7 +261,7 @@ func (h *ProdEgressIPHandler) removeIPFromHostSubnet(instance cloudprovider.Clou
 			}
 		}
 
-		err := h.updateHostSubnet(hostSubnet)
+		err := h.SaveHostSubnet(hostSubnet)
 		if err != nil {
 			return err
 		}
@@ -432,11 +416,13 @@ func (h *ProdEgressIPHandler) RedistributeIPsFromHost(hostSubnet *ocpnetv1.HostS
 // ReadIpsFromHostSubnet - Reads the IP from the status field of the OCP node object and returns them as array.
 func (h *ProdEgressIPHandler) ReadIpsFromHostSubnet(hostSubnet *ocpnetv1.HostSubnet) []*net.IP {
 	if len(hostSubnet.EgressIPs) > 0 {
-		result := make([]*net.IP, len(hostSubnet.EgressIPs))
+		result := make([]*net.IP, 0)
 
-		for i, ipString := range hostSubnet.EgressIPs {
+		log.Info("egress ips configured on hostsubnet", "hostSubnet", hostSubnet, "egress-ips", hostSubnet.EgressIPs)
+
+		for _, ipString := range hostSubnet.EgressIPs {
 			ip := net.ParseIP(ipString)
-			result[i] = &ip
+			result = append(result, &ip)
 		}
 
 		return result
@@ -450,6 +436,7 @@ func (h *ProdEgressIPHandler) LoadHostSubnet(name string) (*ocpnetv1.HostSubnet,
 	result := &ocpnetv1.HostSubnet{}
 	err := h.client.Get(context.TODO(), types.NamespacedName{Name: name}, result)
 	if err != nil {
+		log.Error(err, "unable to retrieve", "hostSubnet", name)
 		return nil, err
 	}
 
@@ -458,22 +445,6 @@ func (h *ProdEgressIPHandler) LoadHostSubnet(name string) (*ocpnetv1.HostSubnet,
 
 // SaveHostSubnet - really?
 func (h *ProdEgressIPHandler) SaveHostSubnet(instance *ocpnetv1.HostSubnet) error {
-	return h.client.Update(context.TODO(), instance)
-}
-
-// LoadNode - really?
-func (h *ProdEgressIPHandler) LoadNode(name string) (*corev1.Node, error) {
-	result := &corev1.Node{}
-	err := h.client.Get(context.TODO(), types.NamespacedName{Name: name}, result)
-	if err != nil {
-		return nil, err
-	}
-
-	return result, nil
-}
-
-// SaveNode - really?
-func (h *ProdEgressIPHandler) SaveNode(instance *corev1.Node) error {
 	return h.client.Update(context.TODO(), instance)
 }
 

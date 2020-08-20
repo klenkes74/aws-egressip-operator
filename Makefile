@@ -5,7 +5,7 @@ MODULE ?= github.com/klenkes74/aws-egressip-operator
 REGISTRY ?= quay.io
 REPOSITORY ?= $(REGISTRY)/klenkes74/aws-egressip-operator
 
-VERSION := 1.1.1
+VERSION := 1.1.2
 IMG := $(REPOSITORY):$(VERSION)
 
 BUILD_COMMIT := $(shell ./scripts/build/get-build-commit.sh)
@@ -19,10 +19,10 @@ LDFLAGS := "-X $(MODULE)/version.Version=$(VERSION) \
 
 all: container
 
-lint: generate fmt vet
-	golint ./pkg/... ./cmd/...
+lint: generate generate-mocks fmt vet
+	golint ./pkg/... ./cmd/... ./test/...
 
-test: lint generate fmt vet
+test: lint
 	go test ./test/... -coverprofile cover.out
 
 # Build manager binary
@@ -46,6 +46,9 @@ vet:
 generate:
 	go generate ./pkg/... ./cmd/...
 
+generate-mocks:
+	mockery -dir pkg/cloudprovider -all -output ./test/mocks
+	mockery -dir pkg/openshift -name OcpClient -output ./test/mocks
 
 podman-login:
 	@podman login -u $(DOCKER_USER) -p $(DOCKER_PASSWORD) $(REGISTRY)

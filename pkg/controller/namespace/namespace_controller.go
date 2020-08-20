@@ -51,7 +51,7 @@ func newReconciler(mgr manager.Manager, cloud *cloudprovider.CloudProvider) reco
 	return &reconcileNamespace{
 		ReconcilerBase: util.NewReconcilerBase(mgr.GetClient(), mgr.GetScheme(), mgr.GetConfig(), mgr.GetEventRecorderFor(controllerName)),
 		cloud:          cloud,
-		handler:        *openshift.NewEgressIPHandler(*cloud, mgr.GetClient()),
+		handler:        *openshift.NewEgressIPHandler(*cloud, *openshift.NewOcpClient(mgr.GetClient())),
 		alarming:       *observability.NewAlarmStore(),
 	}
 }

@@ -1,14 +1,14 @@
 package hostsubnet
 
+//goland:noinspection SpellCheckingInspection
 import (
-	"context"
 	"fmt"
 	"github.com/go-logr/logr"
 	"github.com/klenkes74/aws-egressip-operator/pkg/cloudprovider"
 	"github.com/klenkes74/aws-egressip-operator/pkg/logger"
 	"github.com/klenkes74/aws-egressip-operator/pkg/observability"
 	"github.com/klenkes74/aws-egressip-operator/pkg/openshift"
-	v1 "github.com/openshift/api/network/v1"
+	corev1 "github.com/openshift/api/network/v1"
 	"github.com/redhat-cop/operator-utils/pkg/util"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -22,14 +22,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
+//goland:noinspection SpellCheckingInspection
 const controllerName = "hostsubnet-controller"
+
+//goland:noinspection SpellCheckingInspection
 const finalizerName = "egressip-ipam-operator.redhat-cop.io/hostsubnet-handler"
 
 var log = logger.Log.WithName(controllerName)
 
-var _ reconcile.Reconciler = &reconcileHostsubnet{}
+var _ reconcile.Reconciler = &reconcileHostSubnet{}
 
-type reconcileHostsubnet struct {
+//goland:noinspection SpellCheckingInspection
+type reconcileHostSubnet struct {
 	util.ReconcilerBase
 
 	cloud    cloudprovider.CloudProvider
@@ -44,12 +48,12 @@ func Add(mgr manager.Manager, cloud *cloudprovider.CloudProvider) error {
 	return add(mgr, newReconciler(mgr, cloud))
 }
 
-// newReconciler returns a new reconcile.r
+// newReconciler returns a new reconcile.
 func newReconciler(mgr manager.Manager, cloud *cloudprovider.CloudProvider) reconcile.Reconciler {
-	return &reconcileHostsubnet{
+	return &reconcileHostSubnet{
 		ReconcilerBase: util.NewReconcilerBase(mgr.GetClient(), mgr.GetScheme(), mgr.GetConfig(), mgr.GetEventRecorderFor(controllerName)),
 		cloud:          *cloud,
-		handler:        *openshift.NewEgressIPHandler(*cloud, mgr.GetClient()),
+		handler:        *openshift.NewEgressIPHandler(*cloud, *openshift.NewOcpClient(mgr.GetClient())),
 		alarming:       *observability.NewAlarmStore(),
 	}
 }
@@ -78,7 +82,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	}
 
 	// Watch for changes to primary resource Namespace
-	err = c.Watch(&source.Kind{Type: &v1.HostSubnet{}}, &handler.EnqueueRequestForObject{}, needsReconciliation)
+	err = c.Watch(&source.Kind{Type: &corev1.HostSubnet{}}, &handler.EnqueueRequestForObject{}, needsReconciliation)
 	if err != nil {
 		return err
 	}
@@ -87,7 +91,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 }
 
 // Reconcile - the workhorse of the operator ...
-func (r *reconcileHostsubnet) Reconcile(request reconcile.Request) (reconcile.Result, error) {
+func (r *reconcileHostSubnet) Reconcile(request reconcile.Request) (reconcile.Result, error) {
 	reqLogger := log.WithValues("instance", request.Name)
 	reqLogger.Info("Reconciling hostSubnet")
 
@@ -133,18 +137,11 @@ func (r *reconcileHostsubnet) Reconcile(request reconcile.Request) (reconcile.Re
 	return reconcile.Result{}, nil
 }
 
-func (r *reconcileHostsubnet) updateHostSubnet(instance *v1.HostSubnet, reqLogger logr.Logger, changed bool) (bool, error) {
+func (r *reconcileHostSubnet) updateHostSubnet(instance *corev1.HostSubnet, reqLogger logr.Logger, changed bool) (bool, error) {
 	ips := r.handler.ReadIpsFromHostSubnet(instance)
 
-	reqLogger.Info("reconciling updated host subnet",
-		"ips", ips,
-	)
 	changed = r.addFinalizer(instance, reqLogger) || changed
 
-	return r.ensureIPs(instance, ips, reqLogger, changed)
-}
-
-func (r *reconcileHostsubnet) ensureIPs(instance *v1.HostSubnet, ips []*net.IP, reqLogger logr.Logger, changed bool) (bool, error) {
 	err := r.handler.CheckIPsForHost(instance, ips)
 	if err != nil {
 		reqLogger.Error(err, "problems with IPs. need to redistribute IPs")
@@ -162,21 +159,32 @@ func (r *reconcileHostsubnet) ensureIPs(instance *v1.HostSubnet, ips []*net.IP, 
 	return changed, err
 }
 
-func (r *reconcileHostsubnet) cancelAlarmforIPs(instance *v1.HostSubnet, ips []*net.IP) {
-	for _, ip := range ips {
-		namespace := instance.GetAnnotations()[openshift.IPToNamespaceAnnotation+ip.String()]
-		r.alarming.RemoveAlarmForIP(namespace, ip)
+func (r *reconcileHostSubnet) loadHostSubnet(name types.NamespacedName, reqLogger logr.Logger) (*corev1.HostSubnet, bool, error) {
+	// Fetch the Namespace instance
+	instance, err := r.handler.LoadHostSubnet(name.Name)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			reqLogger.Error(err, "can not find the object. Is already deleted. Don't requeue this request")
+			// Request object not found, could have been deleted after reconcile request.
+			// Owned objects are automatically garbage collected. For additional cleanup logic use finalizers.
+			// Return and don't requeue
+			return nil, true, nil
+		}
+
+		reqLogger.Error(err, "can not load the object. Requeue the request")
+		// Error reading the object - requeue the request.
+		return nil, false, err
 	}
+
+	if util.IsBeingDeleted(instance) && !util.HasFinalizer(instance, finalizerName) {
+		reqLogger.Info("deleted object has no finalizer - ignoring it.")
+		return instance, true, nil
+	}
+
+	return instance, false, nil
 }
 
-func (r *reconcileHostsubnet) raiseAlarmForIPs(instance *v1.HostSubnet, ips []*net.IP) {
-	for _, ip := range ips {
-		namespace := instance.GetAnnotations()[openshift.IPToNamespaceAnnotation+ip.String()]
-		r.alarming.AddAlarm(namespace, []*net.IP{ip})
-	}
-}
-
-func (r *reconcileHostsubnet) deleteHostSubnet(instance *v1.HostSubnet, reqLogger logr.Logger, changed bool) (bool, error) {
+func (r *reconcileHostSubnet) deleteHostSubnet(instance *corev1.HostSubnet, reqLogger logr.Logger, changed bool) (bool, error) {
 	ips := r.handler.ReadIpsFromHostSubnet(instance)
 
 	reqLogger.Info("reconciling deleted host subnet",
@@ -190,8 +198,7 @@ func (r *reconcileHostsubnet) deleteHostSubnet(instance *v1.HostSubnet, reqLogge
 			"ips", ips,
 		)
 
-		egressIPHandler := openshift.NewEgressIPHandler(r.cloud, r.GetClient())
-		distribution, err := (*egressIPHandler).RedistributeIPsFromHost(instance)
+		distribution, err := r.handler.RedistributeIPsFromHost(instance)
 		if err != nil {
 			reqLogger.Error(err,
 				"redistribution of IPs failed. Egress networking will cease working for projects if the other hosts are also failing",
@@ -217,34 +224,8 @@ func (r *reconcileHostsubnet) deleteHostSubnet(instance *v1.HostSubnet, reqLogge
 	return true, nil
 }
 
-func (r *reconcileHostsubnet) loadHostSubnet(name types.NamespacedName, reqLogger logr.Logger) (*v1.HostSubnet, bool, error) {
-	// Fetch the Namespace instance
-	instance := &v1.HostSubnet{}
-	err := r.GetClient().Get(context.TODO(), name, instance)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			reqLogger.Error(err, "can not find the object. Is already deleted. Don't requeue this request")
-			// Request object not found, could have been deleted after reconcile request.
-			// Owned objects are automatically garbage collected. For additional cleanup logic use finalizers.
-			// Return and don't requeue
-			return nil, true, nil
-		}
-
-		reqLogger.Error(err, "can not load the object. Requeue the request")
-		// Error reading the object - requeue the request.
-		return nil, false, err
-	}
-
-	if util.IsBeingDeleted(instance) && !util.HasFinalizer(instance, finalizerName) {
-		reqLogger.Info("deleted object has no finalizer - ignoring it.")
-		return instance, true, nil
-	}
-
-	return instance, false, nil
-}
-
 // adds the finalizer for egressip handling to the list of finalizers if it is not already listed.
-func (r *reconcileHostsubnet) addFinalizer(instance *v1.HostSubnet, reqLogger logr.Logger) bool {
+func (r *reconcileHostSubnet) addFinalizer(instance *corev1.HostSubnet, reqLogger logr.Logger) bool {
 	found := util.HasFinalizer(instance, finalizerName)
 
 	if !found {
@@ -256,7 +237,7 @@ func (r *reconcileHostsubnet) addFinalizer(instance *v1.HostSubnet, reqLogger lo
 }
 
 // removes the finalizer from the list of finalizers on the node
-func (r *reconcileHostsubnet) removeFinalizer(instance *v1.HostSubnet, reqLogger logr.Logger) bool {
+func (r *reconcileHostSubnet) removeFinalizer(instance *corev1.HostSubnet, reqLogger logr.Logger) bool {
 	result := util.HasFinalizer(instance, finalizerName)
 
 	if result {
@@ -265,4 +246,18 @@ func (r *reconcileHostsubnet) removeFinalizer(instance *v1.HostSubnet, reqLogger
 	}
 
 	return result
+}
+
+func (r *reconcileHostSubnet) raiseAlarmForIPs(instance *corev1.HostSubnet, ips []*net.IP) {
+	for _, ip := range ips {
+		namespace := instance.GetAnnotations()[openshift.IPToNamespaceAnnotation+ip.String()]
+		r.alarming.AddAlarm(namespace, []*net.IP{ip})
+	}
+}
+
+func (r *reconcileHostSubnet) cancelAlarmforIPs(instance *corev1.HostSubnet, ips []*net.IP) {
+	for _, ip := range ips {
+		namespace := instance.GetAnnotations()[openshift.IPToNamespaceAnnotation+ip.String()]
+		r.alarming.RemoveAlarmForIP(namespace, ip)
+	}
 }

@@ -1,14 +1,13 @@
 package netnamespace
 
 import (
-	"context"
 	"fmt"
 	"github.com/go-logr/logr"
 	"github.com/klenkes74/aws-egressip-operator/pkg/cloudprovider"
 	"github.com/klenkes74/aws-egressip-operator/pkg/logger"
 	"github.com/klenkes74/aws-egressip-operator/pkg/observability"
 	"github.com/klenkes74/aws-egressip-operator/pkg/openshift"
-	v1 "github.com/openshift/api/network/v1"
+	corev1 "github.com/openshift/api/network/v1"
 	"github.com/redhat-cop/egressip-ipam-operator/pkg/controller/egressipam"
 	"github.com/redhat-cop/operator-utils/pkg/util"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -50,7 +49,7 @@ func newReconciler(mgr manager.Manager, cloud *cloudprovider.CloudProvider) reco
 	return &reconcileNetnamespace{
 		ReconcilerBase: util.NewReconcilerBase(mgr.GetClient(), mgr.GetScheme(), mgr.GetConfig(), mgr.GetEventRecorderFor(controllerName)),
 		cloud:          cloud,
-		handler:        *openshift.NewEgressIPHandler(*cloud, mgr.GetClient()),
+		handler:        *openshift.NewEgressIPHandler(*cloud, *openshift.NewOcpClient(mgr.GetClient())),
 		alarming:       *observability.NewAlarmStore(),
 	}
 }
@@ -83,7 +82,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	}
 
 	// Watch for changes to primary resource Namespace
-	err = c.Watch(&source.Kind{Type: &v1.NetNamespace{}}, &handler.EnqueueRequestForObject{}, IsAnnotated)
+	err = c.Watch(&source.Kind{Type: &corev1.NetNamespace{}}, &handler.EnqueueRequestForObject{}, IsAnnotated)
 	if err != nil {
 		return err
 	}
@@ -98,8 +97,7 @@ func (r *reconcileNetnamespace) Reconcile(request reconcile.Request) (reconcile.
 	reqLogger.Info("Reconciling Netnamespace")
 
 	// Fetch the Namespace instance
-	instance := &v1.NetNamespace{}
-	err := r.GetClient().Get(context.TODO(), request.NamespacedName, instance)
+	instance, err := r.handler.LoadNetNameSpace(request.Name)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Request object not found, could have been deleted after reconcile request.
@@ -129,10 +127,9 @@ func (r *reconcileNetnamespace) Reconcile(request reconcile.Request) (reconcile.
 	if changed {
 		reqLogger.Info("saving the changed netnamespace")
 
-		err = r.GetClient().Update(context.TODO(), instance)
+		err = r.handler.SaveNetNameSpace(instance)
 		if err != nil {
 			reqLogger.Error(err, "could not save the netnamespace")
-
 		}
 	} else {
 		reqLogger.Info("Nothing to do for the netnamespace")
@@ -141,7 +138,7 @@ func (r *reconcileNetnamespace) Reconcile(request reconcile.Request) (reconcile.
 	return reconcile.Result{}, nil
 }
 
-func (r *reconcileNetnamespace) workOnUpdate(instance *v1.NetNamespace, changed bool, reqLogger logr.Logger) (bool, error) {
+func (r *reconcileNetnamespace) workOnUpdate(instance *corev1.NetNamespace, changed bool, reqLogger logr.Logger) (bool, error) {
 	if util.IsBeingDeleted(instance) { // the namespace is deleted and we need to clean up.
 		return false, nil
 	}
@@ -213,7 +210,7 @@ func (r *reconcileNetnamespace) matchingIPs(a []string, b []*net.IP) bool {
 	return len(resultSet) == len(a)
 }
 
-func (r *reconcileNetnamespace) workOnDelete(instance *v1.NetNamespace, changed bool, reqLogger logr.Logger) (bool, error) {
+func (r *reconcileNetnamespace) workOnDelete(instance *corev1.NetNamespace, changed bool, reqLogger logr.Logger) (bool, error) {
 	if !util.IsBeingDeleted(instance) {
 		return changed, nil
 	}
@@ -226,7 +223,7 @@ func (r *reconcileNetnamespace) workOnDelete(instance *v1.NetNamespace, changed 
 }
 
 // add the specified IPs to the cluster to be usable as egress ips
-func (r *reconcileNetnamespace) addSpecifiedIPsToNamespace(instance *v1.NetNamespace, reqLogger logr.Logger) error {
+func (r *reconcileNetnamespace) addSpecifiedIPsToNamespace(instance *corev1.NetNamespace, reqLogger logr.Logger) error {
 	ips := r.getAnnotatedIPs(instance)
 	reqLogger.Info("Adding specified IPs to netnamespace",
 		"ips", ips,
@@ -246,7 +243,7 @@ func (r *reconcileNetnamespace) addSpecifiedIPsToNamespace(instance *v1.NetNames
 }
 
 // returns the IPs that are annotated to be used for the egress ips.
-func (r *reconcileNetnamespace) getAnnotatedIPs(instance *v1.NetNamespace) []*net.IP {
+func (r *reconcileNetnamespace) getAnnotatedIPs(instance *corev1.NetNamespace) []*net.IP {
 	var ips []*net.IP
 	ipstring, found := instance.GetAnnotations()[egressipam.NamespaceAssociationAnnotation]
 	if found && len(ipstring) > 0 {
@@ -261,7 +258,7 @@ func (r *reconcileNetnamespace) getAnnotatedIPs(instance *v1.NetNamespace) []*ne
 	return ips
 }
 
-func (r *reconcileNetnamespace) addIPsToAnnotation(instance *v1.NetNamespace, ips []*net.IP) {
+func (r *reconcileNetnamespace) addIPsToAnnotation(instance *corev1.NetNamespace, ips []*net.IP) {
 	ipStrings := make([]string, len(ips))
 	for i, newip := range ips {
 		ipStrings[i] = newip.String()
@@ -271,7 +268,7 @@ func (r *reconcileNetnamespace) addIPsToAnnotation(instance *v1.NetNamespace, ip
 	instance.SetAnnotations(annotations)
 }
 
-func (r *reconcileNetnamespace) removeIpsFromNetnamespace(instance *v1.NetNamespace) error {
+func (r *reconcileNetnamespace) removeIpsFromNetnamespace(instance *corev1.NetNamespace) error {
 	err := r.handler.RemoveIPsFromInfrastructure(instance)
 	if err != nil {
 		return err
@@ -297,7 +294,7 @@ func (r *reconcileNetnamespace) removeIpsFromNetnamespace(instance *v1.NetNamesp
 }
 
 // Adds the finalizer to the netnamespace
-func (r *reconcileNetnamespace) addFinalizer(instance *v1.NetNamespace) {
+func (r *reconcileNetnamespace) addFinalizer(instance *corev1.NetNamespace) {
 	found := false
 	for _, f := range instance.Finalizers {
 		if f == finalizerName {
@@ -312,7 +309,7 @@ func (r *reconcileNetnamespace) addFinalizer(instance *v1.NetNamespace) {
 }
 
 // Removes the finalizer from the netnamespace.
-func (r *reconcileNetnamespace) removeFinalizer(instance *v1.NetNamespace) {
+func (r *reconcileNetnamespace) removeFinalizer(instance *corev1.NetNamespace) {
 	finalizers := instance.GetFinalizers()
 
 	for i, f := range finalizers {

@@ -15,7 +15,8 @@ func CreateCloudProvider() *CloudProvider {
 		panic("No mock provider implemented!")
 	case "AWS":
 	default:
-		return AwsProvider()
+		result := CloudProvider(AwsProvider())
+		return &result
 	}
 
 	panic("can't come to here, the default should be returned by switch case!")
@@ -28,32 +29,9 @@ type CloudProvider interface {
 	Instance(instanceID string) (*CloudInstance, error)
 	InstanceByHostName(hostname string) (*CloudInstance, error)
 
-	MachineSet(machineSetID string) (CloudMachineSet, error)
-	MachineSets() ([]CloudMachineSet, error)
-	MachineSetForHost(hostname string) (CloudMachineSet, error)
-
-	Network(subnetID string) (*CloudNetwork, error)
-
-	HostNameByIP(ip *net.IP) (string, error)
 	AddSpecifiedIPs(ips []*net.IP) ([]string, error)
 	AddRandomIPs() ([]string, []*net.IP, error)
 	RemoveIP(ip *net.IP) (string, error)
-
-	HostName(instanceID string) (string, error)
-}
-
-// CloudMachineSet hides the different implemenetations for auto scaling defintions of the cloud providers.
-type CloudMachineSet interface {
-	NetworkForIP(ip *net.IP) (*CloudNetwork, error)
-	AddSpecifiedIP(ip *net.IP) (string, error)
-	AddRandomIP(subnet *AwsNetwork) (string, *net.IP, error)
-
-	Name() string                        // Name of the Machineset
-	URI() string                         // Unique Resource Identifier -- e.g. the ARN at AWS
-	Instances() *[]string                // List of instances of this machine set
-	FailureZones() []*string             // List of availability zones the machine set
-	Tags() *map[string]string            // The tags and their values
-	Networks() *map[string]*CloudNetwork // The subnets of the availability zone
 }
 
 // CloudInstance is a single computing instance in the cloud.
@@ -62,7 +40,6 @@ type CloudInstance interface {
 	URI() string      // Unique Resource Identifier -- e.g. the ARN at AWS
 	HostName() string // Hostname of this instance
 
-	MachineSet() string    // MachinesetId this instance belongs to
 	FailureRegion() string // Cloud Region of this instance
 	FailureZone() string   // Failure zone this instance is located in
 

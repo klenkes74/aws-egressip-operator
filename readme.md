@@ -21,12 +21,10 @@ permissions and the reasoning are:
 AWS Permission | Reasoning
 ---------------|-----------------------------------
 EC2:AssignPrivateIpAddresses | Manage the IP addresses of the instances.
-EC2:DescribeAvailabilityZones | Wee need to read the availability zones for detecting the infrastructure context.
 EC2:DescribeInstances | Getting information about the instances (tags, networking interfaces).
 EC2:DescribeNetworkInterfaces | Find instances by their IPv4 address(es).
 EC2:DescribeSubnets | We need to read the subnets to find all CIDR of the account.
-EC2:UnassignPrivateIpAddressesInput | Manage the IP addresses of the instances.
-autoscaling:DescribeAutoScalingGroups | We need to read the ASG to create the MachineSets.
+EC2:UnassignPrivateIpAddresses | Manage the IP addresses of the instances.
 
 
 ## Passing EgressIPs as input
@@ -46,7 +44,7 @@ responsibility of user to check if the IPs match the plans how to use them (e.g.
 
 1. The AWS Subnets used for EgressIPs are tagged within AWS with kubernetes.io/cluster/<cluster-name>=<any value>
 1. Nodes for getting IPs assigned are tagged within AWS with k8s.io/cluster-autoscaler/enabled=true
-1. Nodes for getting IPs assigned are tagged within AWS with kubernetes.io/cluster/<egcluster-name>=owned
+1. Nodes for getting IPs assigned are tagged within AWS with kubernetes.io/cluster/<cluster-name>=owned
 1. Nodes for getting IPs assigned are tagged within AWS with ClusterNode=WorkerNode
 
 
@@ -55,6 +53,9 @@ responsibility of user to check if the IPs match the plans how to use them (e.g.
 This is a cluster-level operator that you can deploy in any namespace, `openshift-aws-egressip-operator` is recommended.
 If you need to pin the operator to special nodes (like the OCP infranodes), please use the namespace node-selector
 annotation to do that. May be helpful in restricting the AWS permissions to only a few nodes.
+
+**Note:** *Create the namespace with `openshift.io/node-selector: ''` in order to deploy to master nodes. Or select the
+ nodes you gave the needed AWS permissions.*
 
 ### Deploy with OpenShift Template
 
@@ -83,8 +84,3 @@ There is a Helm Chart in ./helm/aws-egressip-operator that can be used for deplo
 git clone git@github.com:klenkes74/aws-egressip-operator.git ; cd aws-egressip-operator
 helm upgrade aws-egressip-operator --namespace openshift-aws-egressip-operator ./helm/aws-egressip-operator --set clusterName=dbcs-hugo --install
 ```
-
-The Helm Chart can also be found in the following repository: https://bahnhub.tech.rz.db.de/artifactory/dbcs-helm-release-virtual/aws-egressip-operator
-
-
-**Note:** *Create the namespace with `openshift.io/node-selector: ''` in order to deploy to master nodes.*

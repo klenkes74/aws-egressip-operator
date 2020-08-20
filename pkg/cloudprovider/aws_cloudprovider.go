@@ -4,115 +4,98 @@ import (
 	"errors"
 	"fmt"
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/autoscaling"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/hashicorp/go-multierror"
 	"github.com/klenkes74/aws-egressip-operator/pkg/logger"
 	"github.com/patrickmn/go-cache"
 	"net"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
 
 const defaultAwsRegion = "eu-central-1" // AWS in Frankfurt/Main, Germany is our default
-const defaultInstanceMapSize = 100
-const autoscalingGroupMaxRetrieve = 50
+const defaultClusterName = "hugo"
 
-var log = logger.Log.WithName("aws-cloud")
+var log = logger.Log.WithName("Aws-cloud")
 
-var provider CloudProvider
-
-func init() {
-	data := &AwsCloudProvider{}
-	err := data.initializeProvider()
-	if err != nil {
-		log.Error(err, "can't initialize cloud provider")
-		os.Exit(10)
-	}
-
-	provider = CloudProvider(data)
-}
+// The singleton cloud provider. It will be lazy loaded.
+var provider *AwsCloudProvider
 
 // AwsProvider returns the singleton provider object
-func AwsProvider() *CloudProvider {
-	return &provider
+func AwsProvider() *AwsCloudProvider {
+	if provider == nil {
+		provider = &AwsCloudProvider{}
+	}
+
+	return provider
 }
 
 var _ CloudProvider = &AwsCloudProvider{}
 
 // AwsCloudProvider implements the generic CloudProvider.
 type AwsCloudProvider struct {
-	Region            string
-	AvailabilityZones []*ec2.AvailabilityZone
+	Region string
 
-	aws *cache.Cache // sessions, ec2 client and autoscaling client
+	Aws AwsClient
 
-	autoscalingGroups           *cache.Cache
-	machinesets                 *cache.Cache
-	instances                   *cache.Cache
-	instancesByHostname         map[string]string
-	instancesByPrivateDNS       map[string]string
-	instancesByPrivateIPv4      map[string]string
-	instancesByNetworkInterface map[string]string
-	instancesBySubnet           map[string][]string
-	instancesByMachineset       map[string][]string
-	subnets                     *cache.Cache
-	interfaces                  *cache.Cache
+	instances           *cache.Cache
+	instancesByHostname map[string]string
+	instancesBySubnet   map[string][]string
+	subnets             *cache.Cache
 
 	ClusterName string // name of the cluster -- will be the AWS tag key="kubernetes.io/cluster/<ClusterName>", value="owned"
 
-	initialized            bool  // if the general part of this provider is initialized
-	machineSetsLoaded      bool  // if the machine sets (AWS AutoscalingGroups) are loaded
-	autoscalingMaxRetrieve int64 // maximum number of autoscaling groups to retrieve in one chunk
+	initialized bool // if the general part of this provider is initialized
+}
+
+// SetAwsClient -- Injector to get a special AwsClient (e.g. a mocked one) for special purposes ...
+func (a *AwsCloudProvider) SetAwsClient(client *AwsClient, region string, clusterName string) {
+	a.Aws = *client
+	a.ClusterName = clusterName
+	a.Region = region
+
+	a.initialized = false
 }
 
 // initializeProvider -- initialized the AWS client and the region.
 func (a *AwsCloudProvider) initializeProvider() error {
+	var err error
+
 	if a.initialized {
 		return nil
 	}
 
-	a.Region, _ = a.readEnvironment("AWS_REGION", defaultAwsRegion)
-
-	clusterName, err := a.readEnvironment("CLUSTER_NAME")
-	if err != nil {
-		return err
+	if a.Region == "" {
+		a.Region, err = a.readEnvironment("AWS_REGION", defaultAwsRegion)
+		if err != nil {
+			return err
+		}
 	}
-	a.ClusterName = clusterName
 
-	a.aws = cache.New(60*time.Minute, time.Minute)
+	if a.ClusterName == "" {
+		a.ClusterName, err = a.readEnvironment("CLUSTER_NAME", defaultClusterName)
+		if err != nil {
+			return err
+		}
+	}
+
+	if a.Aws == nil {
+		a.Aws, err = CreateAwsClient(a.Region)
+		if err != nil {
+			return err
+		}
+	}
 
 	a.instances = cache.New(time.Minute, 10*time.Minute)
 	a.subnets = cache.New(time.Minute, 10*time.Minute)
-	a.machinesets = cache.New(time.Minute, 10*time.Minute)
-	a.autoscalingGroups = cache.New(time.Minute, 10*time.Minute)
-	a.interfaces = cache.New(time.Minute, 10*time.Minute)
-	a.instancesByHostname = make(map[string]string, defaultInstanceMapSize)
-	a.instancesByPrivateDNS = make(map[string]string, defaultInstanceMapSize)
-	a.instancesByPrivateIPv4 = make(map[string]string, defaultInstanceMapSize)
-	a.instancesByNetworkInterface = make(map[string]string, defaultInstanceMapSize)
-	a.instancesBySubnet = make(map[string][]string, defaultInstanceMapSize)
-	a.instancesByMachineset = make(map[string][]string, defaultInstanceMapSize)
-
-	err = a.initializeAvailabilityZones()
-	if err != nil {
-		return err
-	}
-
-	asgChunkSize, _ := a.readEnvironment("AWS_RETRIEVE_AUTOSCALING_GROUP_CHUNK_SIZE", strconv.Itoa(autoscalingGroupMaxRetrieve))
-	asgChunkSizeInt, _ := strconv.Atoi(asgChunkSize)
-	a.autoscalingMaxRetrieve = int64(asgChunkSizeInt)
+	a.instancesByHostname = make(map[string]string)
+	a.instancesBySubnet = make(map[string][]string)
 
 	a.initialized = true
 	log.Info("Initialized AWS Cloud Provider.",
 		"Cluster Name", a.ClusterName,
 		"AWS Region", a.Region,
-		"AWS EC2 Client", a.ec2Client(),
-		"AutoscalingGroup Max Retrieve", a.autoscalingMaxRetrieve,
 	)
 	return nil
 }
@@ -148,339 +131,11 @@ func (a *AwsCloudProvider) ClusterTag() (string, string) {
 	return "kubernetes.io/cluster/" + a.ClusterName, "owned"
 }
 
-func (a *AwsCloudProvider) session() *session.Session {
-	var result *session.Session
-
-	cached, found := a.aws.Get("session")
-	if found {
-		result = cached.(*session.Session)
-	} else {
-		awssession := a.createSession()
-		a.aws.Set("session", awssession, 60*time.Minute)
-
-		result = awssession
-	}
-
-	return result
-}
-
-func (a *AwsCloudProvider) ec2Client() *ec2.EC2 {
-	var result *ec2.EC2
-
-	cached, found := a.aws.Get("ec2Client")
-	if found {
-		result = cached.(*ec2.EC2)
-	} else {
-		ec2Client, err := a.createAwsEc2Client()
-		if err != nil {
-			log.Error(err, "can not create AWS EC2 client")
-			os.Exit(10)
-		}
-		a.aws.Set("ec2Client", ec2Client, 10*time.Minute)
-
-		result = ec2Client
-	}
-
-	return result
-}
-
-func (a *AwsCloudProvider) awsAutoscalingClient() *autoscaling.AutoScaling {
-	var result *autoscaling.AutoScaling
-
-	cached, found := a.aws.Get("autoscalingClient")
-	if found {
-		result = cached.(*autoscaling.AutoScaling)
-	} else {
-		ec2Client, err := a.createAwsAutoscalingClient()
-		if err != nil {
-			log.Error(err, "can not create AWS autoscaling client")
-			os.Exit(11)
-		}
-		a.aws.Set("autoscalingClient", ec2Client, 10*time.Minute)
-
-		result = ec2Client
-	}
-
-	return result
-
-}
-
-func (a *AwsCloudProvider) createSession() *session.Session {
-	return session.Must(session.NewSession())
-}
-
-func (a *AwsCloudProvider) createAwsEc2Client() (*ec2.EC2, error) {
-	client := ec2.New(a.session(), aws.NewConfig().WithRegion(a.Region))
-	if client == nil {
-		return nil, errors.New("can't create new AWS ec2 client")
-	}
-	return client, nil
-}
-
-func (a *AwsCloudProvider) createAwsAutoscalingClient() (*autoscaling.AutoScaling, error) {
-	asgClient := autoscaling.New(a.session(), aws.NewConfig().WithRegion(a.Region))
-	if asgClient == nil {
-		return nil, errors.New("can't create new AWS autoscaling client")
-	}
-	return asgClient, nil
-}
-
-// Loads all availability zones within the configured region.
-func (a *AwsCloudProvider) initializeAvailabilityZones() error {
-	if len(a.AvailabilityZones) > 0 {
-		return nil
-	}
-
-	input := ec2.DescribeAvailabilityZonesInput{
-		Filters: []*ec2.Filter{
-			{
-				Name:   aws.String("region-name"),
-				Values: aws.StringSlice([]string{a.Region}),
-			},
-		},
-	}
-
-	output, err := a.ec2Client().DescribeAvailabilityZones(&input)
-	if err != nil {
-		if aerr, ok := err.(awserr.Error); ok {
-			switch aerr.Code() {
-			default:
-				log.Error(err, aerr.Error())
-			}
-		} else {
-			fmt.Println(err.Error())
-		}
-
-		return err
-	}
-
-	for _, zone := range output.AvailabilityZones {
-		log.V(4).Info("Adding aviability zone.",
-			"region", a.Region,
-			"availability-zone", zone,
-		)
-		a.AvailabilityZones = append(a.AvailabilityZones, zone)
-	}
-	log.Info("Added availability zones availailable.",
-		"region", a.Region,
-		"number-of-availability-zones", len(output.AvailabilityZones),
-	)
-
-	return nil
-}
-
-// HostName reads the hostname to the given instance-id.
-func (a *AwsCloudProvider) HostName(instanceID string) (string, error) {
-	_ = a.initializeProvider()
-
-	instance, err := a.instance(instanceID)
-	if err != nil {
-		return "", err
-	}
-
-	return *instance.PrivateDnsName, nil
-}
-
-// MachineSet -- retrieves a machine set by specifying the name (AWS autoscaling group name)
-//
-// Taking the name instead of the ARN (which would resemble the ID concept more) but the ARN is not annotated at the
-// AWS instances but the name is as "aws:autoscaling:groupName" tag.
-func (a *AwsCloudProvider) MachineSet(machinesetID string) (CloudMachineSet, error) {
-	_ = a.initializeProvider()
-
-	data, err := a.getMachineSet(machinesetID)
-	if err != nil {
-		return nil, err
-	}
-
-	return CloudMachineSet(data), nil
-}
-
-func (a *AwsCloudProvider) getMachineSet(machineSetID string) (*AwsMachineSet, error) {
-	err := a.loadAllMachineSetsOfCluster()
-	if err != nil {
-		return nil, err
-	}
-
-	result, found := a.machinesets.Get(machineSetID)
-	if !found {
-		return nil, fmt.Errorf("no machine set with id '%s'", machineSetID)
-	}
-
-	return result.(*AwsMachineSet), nil
-}
-
-// MachineSets returns a full list of machine sets.
-func (a *AwsCloudProvider) MachineSets() ([]CloudMachineSet, error) {
-	_ = a.initializeProvider()
-	err := a.loadAllMachineSetsOfCluster()
-	if err != nil {
-		return nil, err
-	}
-
-	var result []CloudMachineSet
-	for _, item := range a.machinesets.Items() {
-		result = append(result, CloudMachineSet(item.Object.(*AwsMachineSet)))
-	}
-
-	return result, nil
-}
-
-// loadAllMachineSetsOfCluster -- loads all AWS autoscaling groups labeled with the clustername
-//
-// Since AWS doesn't provide a filter for doing that we need to load ALL autoscaling groups and
-// filter ourselves by reading the AWS tag.
-//
-// Need to wrap the call into a loop since AWS delivers a maximum amount of results at most and
-// we need to iterate over the returned result sets until all data has been given.
-func (a *AwsCloudProvider) loadAllMachineSetsOfCluster() error {
-	if a.machineSetsLoaded {
-		return nil
-	}
-
-	input := autoscaling.DescribeAutoScalingGroupsInput{}
-
-	next := true
-	for next {
-		output, err := a.awsAutoscalingClient().DescribeAutoScalingGroups(&input)
-		if err != nil {
-			if aerr, ok := err.(awserr.Error); ok {
-				switch aerr.Code() {
-				default:
-					log.Error(err, aerr.Error())
-				}
-			} else {
-				fmt.Println(err.Error())
-			}
-
-			return err
-		}
-
-		if len(output.AutoScalingGroups) < 1 && a.machinesets.ItemCount() < 1 {
-			return errors.New("no autoscaling groups found in AWS")
-		}
-
-		for _, group := range output.AutoScalingGroups {
-			autoscalerEnabled := false
-			correctCluster := false
-
-			for _, tag := range group.Tags {
-				if *tag.Key == "k8s.io/cluster-autoscaler/enabled" && *tag.Value == "true" {
-					autoscalerEnabled = true
-				}
-
-				if *tag.Key == fmt.Sprintf("kubernetes.io/cluster/%s", a.ClusterName) { // the value is not important ...
-					correctCluster = true
-				}
-
-				if correctCluster && autoscalerEnabled {
-					log.Info("adding autoscaling group",
-						"name", group.AutoScalingGroupName,
-						"availability-zones", group.AvailabilityZones,
-					)
-					a.autoscalingGroups.Set(*group.AutoScalingGroupName, group, cache.DefaultExpiration)
-
-					machineSet, err := a.convertToMachineSet(group)
-					if err != nil {
-						return err
-					}
-					a.machinesets.Set(*group.AutoScalingGroupName, machineSet, cache.DefaultExpiration)
-
-					break // no need to rush through all tags if we already decided to have the machine set added ...
-				}
-			}
-		}
-
-		// Check if there are additional chunks of data left that need to be retrieved.
-		if output.NextToken != nil {
-			input.SetNextToken(*output.NextToken)
-		} else {
-			next = false // end the loop to collect all ASGs
-		}
-
-		log.Info("Loaded machinesets from AWS",
-			"number-of-machinesets", a.machinesets.ItemCount(),
-		)
-	}
-
-	a.machineSetsLoaded = true // mark as initialized
-	log.Info("Loaded all machinesets annotated with the current cluster name",
-		"cluster-name", a.ClusterName,
-		"count-of-machinesets", a.machinesets.ItemCount(),
-		"count-of-autoscaling-groups", a.autoscalingGroups.ItemCount(),
-	)
-	return nil
-}
-
-// convertToMachineSet -- Converts the AWS autoscaling group to our internal AwsMachineSet.
-//
-// In addition the cache containing the instances of the cluster sorted by availability zones will be polulated.
-func (a *AwsCloudProvider) convertToMachineSet(orig *autoscaling.Group) (*AwsMachineSet, error) {
-
-	result := new(AwsMachineSet)
-	result.provider = a
-	result.name = *orig.AutoScalingGroupName
-	result.arn = *orig.AutoScalingGroupARN
-	result.availabilityZones = orig.AvailabilityZones
-	result.instances = []string{}
-
-	for _, instance := range orig.Instances {
-		result.instances = append(result.instances, *instance.InstanceId)
-	}
-
-	subnetIds := strings.Split(*orig.VPCZoneIdentifier, ",")
-	result.subnets = make(map[string]*AwsNetwork, len(subnetIds))
-	for _, subnetID := range subnetIds {
-		subnet, err := a.getAWSSubnet(subnetID)
-		if err != nil {
-			return nil, err
-		}
-
-		result.subnets[subnetID] = subnet
-	}
-
-	result.tags = make(map[string]string, len(orig.Tags))
-	for _, tag := range orig.Tags {
-		result.tags[*tag.Key] = *tag.Value
-	}
-
-	return result, nil
-}
-
-// HostNameByIP returns the hostname of the IP given.
-func (a *AwsCloudProvider) HostNameByIP(ip *net.IP) (string, error) {
-	_ = a.initializeProvider()
-
-	if a.instancesByPrivateIPv4[ip.String()] != "" {
-		result, err := a.instance(a.instancesByHostname[ip.String()])
-		if err != nil {
-			return "", err
-		}
-		return *result.PrivateDnsName, nil
-	}
-
-	filter := ec2.DescribeInstancesInput{
-		Filters: []*ec2.Filter{
-			{
-				Name:   aws.String("network-interface.addresses.private-ip-address"),
-				Values: aws.StringSlice([]string{ip.String()}),
-			},
-		},
-	}
-
-	instance, err := a.loadInstanceFromAws(filter)
-	if err != nil {
-		return "", err
-	}
-
-	return *instance.PrivateDnsName, nil
-}
-
 // Instance -- loads an EC2 instance by its ID
 func (a *AwsCloudProvider) Instance(instanceID string) (*CloudInstance, error) {
 	_ = a.initializeProvider()
 
-	log.Info("looking for aws instance",
+	log.Info("looking for Aws instance",
 		"instance-id", instanceID,
 	)
 
@@ -567,12 +222,10 @@ func (a *AwsCloudProvider) loadAllInstancesFromAws() ([]*ec2.Instance, error) {
 	key, _ := a.ClusterTag()
 
 	filter := a.allClusterTagFilter(key)
-	add := ec2.Filter{Name: aws.String("tag:k8s.io/cluster-autoscaler/enabled"), Values: aws.StringSlice([]string{"true"})}
-	filter = append(filter, &add)
-	add = ec2.Filter{Name: aws.String("tag:ClusterNode"), Values: aws.StringSlice([]string{"WorkerNode"})}
-	filter = append(filter, &add)
-	add = ec2.Filter{Name: aws.String("instance-state-name"), Values: aws.StringSlice([]string{"running"})}
-	filter = append(filter, &add)
+	//goland:noinspection SpellCheckingInspection
+	filter = append(filter, &ec2.Filter{Name: aws.String("tag:k8s.io/cluster-autoscaler/enabled"), Values: aws.StringSlice([]string{"true"})})
+	filter = append(filter, &ec2.Filter{Name: aws.String("tag:ClusterNode"), Values: aws.StringSlice([]string{"WorkerNode"})})
+	filter = append(filter, &ec2.Filter{Name: aws.String("instance-state-name"), Values: aws.StringSlice([]string{"running"})})
 
 	return a.loadInstancesFromAws(ec2.DescribeInstancesInput{Filters: filter})
 }
@@ -587,17 +240,8 @@ func (a *AwsCloudProvider) allClusterTagFilter(key string) []*ec2.Filter {
 }
 
 func (a *AwsCloudProvider) loadInstancesFromAws(filter ec2.DescribeInstancesInput) ([]*ec2.Instance, error) {
-	instances, err := a.ec2Client().DescribeInstances(&filter)
+	instances, err := a.Aws.DescribeInstances(&filter)
 	if err != nil {
-		if aerr, ok := err.(awserr.Error); ok {
-			switch aerr.Code() {
-			default:
-				log.Error(err, aerr.Error())
-			}
-		} else {
-			fmt.Println(err.Error())
-		}
-
 		return nil, err
 	}
 
@@ -634,87 +278,14 @@ func (a *AwsCloudProvider) initializeInstanceInformation(instance *ec2.Instance)
 		a.instancesByHostname[*instance.PrivateDnsName] = *instance.InstanceId
 	}
 
-	if len(*instance.PrivateIpAddress) > 0 {
-		a.instancesByPrivateIPv4[*instance.PrivateIpAddress] = *instance.InstanceId
-	}
-
 	if len(instance.NetworkInterfaces) >= 1 {
 		networkInterface := instance.NetworkInterfaces[0]
-		a.instancesByNetworkInterface[*networkInterface.NetworkInterfaceId] = *instance.InstanceId
 
 		if a.instancesBySubnet[*networkInterface.SubnetId] == nil {
-			a.instancesBySubnet[*networkInterface.SubnetId] = make([]string, defaultInstanceMapSize)
+			a.instancesBySubnet[*networkInterface.SubnetId] = make([]string, 0)
 		}
 		a.instancesBySubnet[*networkInterface.SubnetId] = append(a.instancesBySubnet[*networkInterface.SubnetId], *instance.InstanceId)
 	}
-
-	for _, tag := range instance.Tags {
-		if *tag.Key == "aws:autoscaling:groupName" {
-			if a.instancesByMachineset[*tag.Value] == nil {
-				a.instancesByMachineset[*tag.Value] = make([]string, defaultInstanceMapSize)
-			}
-			a.instancesByMachineset[*tag.Value] = append(a.instancesByMachineset[*tag.Value], *instance.InstanceId)
-		}
-	}
-}
-
-// Network loads an AWS subnet by its ID
-func (a *AwsCloudProvider) Network(subnetID string) (*CloudNetwork, error) {
-	data, err := a.getAWSSubnet(subnetID)
-	if err != nil {
-		return nil, err
-	}
-
-	result := CloudNetwork(data)
-	return &result, nil
-}
-
-func (a *AwsCloudProvider) getAWSSubnet(subnetID string) (*AwsNetwork, error) {
-	_ = a.initializeProvider()
-
-	var result *ec2.Subnet
-	var err error
-
-	cached, found := a.subnets.Get(subnetID)
-	if found {
-		result = cached.(*ec2.Subnet)
-	} else {
-		result, err = a.loadSubnetFromAws(subnetID)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return a.convertToNetwork(result)
-}
-
-func (a *AwsCloudProvider) loadSubnetFromAws(subnetID string) (*ec2.Subnet, error) {
-	var filter = ec2.DescribeSubnetsInput{
-		Filters: []*ec2.Filter{
-			{
-				Name:   aws.String("subnet-id"),
-				Values: aws.StringSlice([]string{subnetID}),
-			},
-		},
-	}
-
-	subnets, err := a.ec2Client().DescribeSubnets(&filter)
-	if err != nil {
-		if aerr, ok := err.(awserr.Error); ok {
-			switch aerr.Code() {
-			default:
-				log.Error(err, aerr.Error())
-			}
-		} else {
-			fmt.Println(err.Error())
-		}
-
-		return nil, err
-	}
-	log.V(8).Info("Found subnet", "subnetCount", len(subnets.Subnets))
-	a.subnets.Set(*subnets.Subnets[0].SubnetId, subnets.Subnets[0], cache.DefaultExpiration)
-
-	return subnets.Subnets[0], nil
 }
 
 func (a *AwsCloudProvider) loadSubnetsFromAws() error {
@@ -726,7 +297,7 @@ func (a *AwsCloudProvider) loadSubnetsFromAws() error {
 		"filter", filter,
 	)
 
-	subnets, err := a.ec2Client().DescribeSubnets(&filter)
+	subnets, err := a.Aws.DescribeSubnets(&filter)
 	if err != nil {
 		return err
 	}
@@ -738,15 +309,6 @@ func (a *AwsCloudProvider) loadSubnetsFromAws() error {
 	return nil
 }
 
-func (a *AwsCloudProvider) convertToNetwork(subnet *ec2.Subnet) (*AwsNetwork, error) {
-	result, err := CreateNetwork(a, subnet)
-	if err != nil {
-		return nil, err
-	}
-
-	return result, nil
-}
-
 // addRandomIPToInterface -- adds an additional IP to the given interface.
 //
 // AWS will assign a free IP address to the given Interface.
@@ -755,7 +317,7 @@ func (a *AwsCloudProvider) addRandomIPToInterface(interfaceID string) (*net.IP, 
 		NetworkInterfaceId:             aws.String(interfaceID),
 		SecondaryPrivateIpAddressCount: aws.Int64(int64(1)),
 	}
-	addressResponse, err := a.ec2Client().AssignPrivateIpAddresses(&addressRequest)
+	addressResponse, err := a.Aws.AssignPrivateIPAddresses(&addressRequest)
 	if err != nil {
 		return nil, err
 	}
@@ -783,7 +345,7 @@ func (a *AwsCloudProvider) addSpecifiedIPToInterface(interfaceID string, ip net.
 		NetworkInterfaceId: aws.String(interfaceID),
 		PrivateIpAddresses: aws.StringSlice([]string{ip.String()}),
 	}
-	_, err := a.ec2Client().AssignPrivateIpAddresses(&addressRequest)
+	_, err := a.Aws.AssignPrivateIPAddresses(&addressRequest)
 	if err != nil {
 		return err
 	}
@@ -797,6 +359,8 @@ func (a *AwsCloudProvider) addSpecifiedIPToInterface(interfaceID string, ip net.
 
 // AddSpecifiedIPs adds the given IPs to the cloud.
 func (a *AwsCloudProvider) AddSpecifiedIPs(ips []*net.IP) ([]string, error) {
+	_ = a.initializeProvider()
+
 	result := make([]string, len(ips))
 	assignmentErrors := make([]error, 0)
 
@@ -861,7 +425,7 @@ func (a *AwsCloudProvider) addSpecifiedIP(ip *net.IP) (string, error) {
 func (a *AwsCloudProvider) findSubnetForIP(ip *net.IP) (*ec2.Subnet, error) {
 	var result *ec2.Subnet
 
-	if a.subnets.ItemCount() < 1 || len(a.subnets.Items()) < 1 {
+	if a.subnets == nil || a.subnets.ItemCount() < 1 || len(a.subnets.Items()) < 1 {
 		log.Info("initializing subnets from AWS")
 		err := a.loadSubnetsFromAws()
 		if err != nil {
@@ -870,7 +434,7 @@ func (a *AwsCloudProvider) findSubnetForIP(ip *net.IP) (*ec2.Subnet, error) {
 	}
 
 	log.Info("checking subnets from AWS",
-		"subnet-count-itemcount", a.subnets.ItemCount(),
+		"subnet-count-item-count", a.subnets.ItemCount(),
 		"subnet-count-len", len(a.subnets.Items()),
 	)
 
@@ -901,7 +465,7 @@ func (a *AwsCloudProvider) findSubnetForIP(ip *net.IP) (*ec2.Subnet, error) {
 	return result, nil
 }
 
-// AddRandomIPs adds a random IP addresses to any machine of the given machineset. It will add one ip address in every
+// AddRandomIPs adds a random IP addresses to any machine of the given machine set. It will add one ip address in every
 // subnet used by the machine set.
 // It will return either the instances and the new assigned IPs or an error.
 func (a *AwsCloudProvider) AddRandomIPs() ([]string, []*net.IP, error) {
@@ -1026,7 +590,7 @@ func (a *AwsCloudProvider) RemoveIP(ip *net.IP) (string, error) {
 		return "", err
 	}
 
-	return a.unassignIPFromNetworkInterface(networkInterface, ip)
+	return a.unAssignIPFromNetworkInterface(networkInterface, ip)
 }
 
 func (a *AwsCloudProvider) findNetworkInterfaceForIP(ip *net.IP) (*ec2.NetworkInterface, error) {
@@ -1034,7 +598,7 @@ func (a *AwsCloudProvider) findNetworkInterfaceForIP(ip *net.IP) (*ec2.NetworkIn
 		Filters: a.createEc2Filter("addresses.private-ip-address", []string{ip.String()}),
 	}
 
-	output, err := a.ec2Client().DescribeNetworkInterfaces(&input)
+	output, err := a.Aws.DescribeNetworkInterfaces(&input)
 	if err != nil {
 		return nil, err
 	}
@@ -1044,8 +608,8 @@ func (a *AwsCloudProvider) findNetworkInterfaceForIP(ip *net.IP) (*ec2.NetworkIn
 	}
 
 	if output.NetworkInterfaces[0].Attachment != nil {
-		log.Info("found networkinterface",
-			"networkinterface-id", output.NetworkInterfaces[0].NetworkInterfaceId,
+		log.Info("found network interface",
+			"network-interface-id", output.NetworkInterfaces[0].NetworkInterfaceId,
 			"instance-id", output.NetworkInterfaces[0].Attachment.InstanceId,
 			"ip", ip,
 		)
@@ -1056,19 +620,19 @@ func (a *AwsCloudProvider) findNetworkInterfaceForIP(ip *net.IP) (*ec2.NetworkIn
 	return output.NetworkInterfaces[0], nil
 }
 
-func (a *AwsCloudProvider) unassignIPFromNetworkInterface(networkInterface *ec2.NetworkInterface, ip *net.IP) (string, error) {
+func (a *AwsCloudProvider) unAssignIPFromNetworkInterface(networkInterface *ec2.NetworkInterface, ip *net.IP) (string, error) {
 	if networkInterface.Attachment != nil {
 		instanceID := *networkInterface.Attachment.InstanceId
 
 		log.Info("removing network interface from instance",
-			"networkinterface-id", networkInterface.NetworkInterfaceId,
+			"network-interface-id", networkInterface.NetworkInterfaceId,
 			"instance-id", instanceID,
 		)
-		unassign := ec2.UnassignPrivateIpAddressesInput{
+		unAssign := ec2.UnassignPrivateIpAddressesInput{
 			NetworkInterfaceId: networkInterface.NetworkInterfaceId,
 			PrivateIpAddresses: aws.StringSlice([]string{ip.String()}),
 		}
-		_, err := a.ec2Client().UnassignPrivateIpAddresses(&unassign)
+		_, err := a.Aws.UnassignPrivateIPAddresses(&unAssign)
 		if err != nil {
 			return "", err
 		}
@@ -1086,17 +650,4 @@ func (a *AwsCloudProvider) createEc2Filter(key string, values []string) []*ec2.F
 			Values: aws.StringSlice(values),
 		},
 	}
-}
-
-// MachineSetForHost returns the machine set the host is controlled by.
-func (a *AwsCloudProvider) MachineSetForHost(hostname string) (CloudMachineSet, error) {
-	_ = a.initializeProvider()
-
-	instance, err := a.InstanceByHostName(hostname)
-	if err != nil {
-		return nil, err
-	}
-
-	machinesetID := (*instance).MachineSet()
-	return a.MachineSet(machinesetID)
 }
